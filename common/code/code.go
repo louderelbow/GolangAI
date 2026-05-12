@@ -33,7 +33,7 @@ var msg = map[Code]string{
 	CodeSuccess: "success",
 
 	CodeInvalidParams:    "请求参数错误",
-	CodeUserExist:        "用户名已存在",
+	CodeUserExist:        "该邮箱已经注册过账号",
 	CodeUserNotExist:     "用户不存在",
 	CodeInvalidPassword:  "用户名或密码错误",
 	CodeNotMatchPassword: "两次密码不一致",

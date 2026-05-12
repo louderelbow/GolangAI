@@ -37,7 +37,7 @@ func Register(email, password, captcha string) (string, code.Code) {
 	var userInformation *model.User
 
 	//1:先判断用户是否已经存在了
-	if ok, _ := user.IsExistUser(email); ok {
+	if ok, _ := user.IsExistUserByEmail(email); ok {
 		return "", code.CodeUserExist
 	}
 

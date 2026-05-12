@@ -77,3 +77,9 @@ func GetUserByUsername(username string) (*model.User, error) {
 	err := DB.Where("username = ?", username).First(user).Error
 	return user, err
 }
+
+func GetUserByEmail(email string) (*model.User, error) {
+	user := new(model.User)
+	err := DB.Where("email = ?", email).First(user).Error
+	return user, err
+}
