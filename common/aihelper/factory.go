@@ -32,7 +32,6 @@ func GetGlobalFactory() *AIModelFactory {
 
 // 注册模型
 func (f *AIModelFactory) registerCreators() {
-	//OpenAI
 	f.creators["1"] = func(ctx context.Context, config map[string]interface{}) (AIModel, error) {
 		return NewOpenAIModel(ctx)
 	}

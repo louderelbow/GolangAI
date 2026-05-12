@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"os"
 
 	"github.com/BurntSushi/toml"
 )
@@ -86,10 +87,14 @@ var DefaultRedisKeyConfig = RedisKeyConfig{
 
 var config *Config
 
-// InitConfig 初始化项目配置
 func InitConfig() error {
-	// 设置配置文件路径（相对于 main.go 所在的目录）
-	if _, err := toml.DecodeFile("config/config.toml", config); err != nil {
+	configFile := "config/config.toml"
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		configFile = "config/config.toml.example"
+		log.Println("[WARNING] config.toml not found, using config.toml.example (please fill in your real config)")
+	}
+
+	if _, err := toml.DecodeFile(configFile, config); err != nil {
 		log.Fatal(err.Error())
 		return err
 	}

@@ -25,7 +25,7 @@
         <button class="sync-btn" @click="syncHistory" :disabled="!currentSessionId || tempSession">同步历史数据</button>
         <label for="modelType">选择模型：</label>
         <select id="modelType" v-model="selectedModel" class="model-select">
-          <option value="1">阿里百炼</option>
+          <option value="1">DeepSeek</option>
           <option value="2">阿里百炼 RAG</option>
           <option value="3">阿里百炼 MCP</option>
         </select>
@@ -99,7 +99,7 @@ export default {
     const loading = ref(false)
     const messagesRef = ref(null)
     const messageInput = ref(null)
-    const selectedModel = ref('1')
+    const selectedModel = ref('2')
     const isStreaming = ref(false)
     const uploading = ref(false)
     const fileInput = ref(null)

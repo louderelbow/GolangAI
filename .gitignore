@@ -25,3 +25,6 @@ Thumbs.db
 
 # 环境变量文件（防止泄露你的 API Key）
 .env
+
+# 配置文件（真实配置不上传，请复制 config.toml.example 为 config.toml 后填写）
+config/config.toml

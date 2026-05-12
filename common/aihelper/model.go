@@ -29,15 +29,32 @@ type AIModel interface {
 	GetModelType() string
 }
 
-// =================== OpenAI 实现 ===================
+// =================== DeepSeek 实现（兼容 OpenAI 协议）===================
 type OpenAIModel struct {
 	llm model.ToolCallingChatModel
 }
 
 func NewOpenAIModel(ctx context.Context) (*OpenAIModel, error) {
-	key := os.Getenv("OPENAI_API_KEY")
-	modelName := os.Getenv("OPENAI_MODEL_NAME")
-	baseURL := os.Getenv("OPENAI_BASE_URL")
+	baseURL := os.Getenv("DEEPSEEK_BASE_URL")
+	if baseURL == "" {
+		baseURL = os.Getenv("OPENAI_BASE_URL")
+	}
+	if baseURL == "" {
+		baseURL = "https://api.deepseek.com"
+	}
+
+	modelName := os.Getenv("DEEPSEEK_MODEL_NAME")
+	if modelName == "" {
+		modelName = os.Getenv("OPENAI_MODEL_NAME")
+	}
+	if modelName == "" {
+		modelName = "deepseek-chat"
+	}
+
+	key := os.Getenv("DEEPSEEK_API_KEY")
+	if key == "" {
+		key = os.Getenv("OPENAI_API_KEY")
+	}
 
 	llm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		BaseURL: baseURL,
@@ -45,7 +62,7 @@ func NewOpenAIModel(ctx context.Context) (*OpenAIModel, error) {
 		APIKey:  key,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create openai model failed: %v", err)
+		return nil, fmt.Errorf("create deepseek model failed: %v", err)
 	}
 	return &OpenAIModel{llm: llm}, nil
 }
@@ -53,7 +70,7 @@ func NewOpenAIModel(ctx context.Context) (*OpenAIModel, error) {
 func (o *OpenAIModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
 	resp, err := o.llm.Generate(ctx, messages)
 	if err != nil {
-		return nil, fmt.Errorf("openai generate failed: %v", err)
+		return nil, fmt.Errorf("deepseek generate failed: %v", err)
 	}
 	return resp, nil
 }
@@ -61,7 +78,7 @@ func (o *OpenAIModel) GenerateResponse(ctx context.Context, messages []*schema.M
 func (o *OpenAIModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
 	stream, err := o.llm.Stream(ctx, messages)
 	if err != nil {
-		return "", fmt.Errorf("openai stream failed: %v", err)
+		return "", fmt.Errorf("deepseek stream failed: %v", err)
 	}
 	defer stream.Close()
 
