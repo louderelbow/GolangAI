@@ -1,53 +1,93 @@
 <template>
-  <div class="image-recognition-container">
-    <!-- 左侧会话列表 -->
-    <div class="session-list">
-      <div class="session-list-header">
-        <span>图像识别</span>
-      </div>
-      <ul class="session-list-ul">
-        <li class="session-item active">
-          图像识别助手
-        </li>
-      </ul>
+  <div class="page">
+    <div class="particles">
+      <span v-for="i in 16" :key="i" class="dot" :style="dotStyle(i)"></span>
     </div>
 
-    <!-- 右侧聊天区域 -->
-    <div class="chat-section">
-      <div class="top-bar">
-        <button class="back-btn" @click="$router.push('/menu')">← 返回</button>
-        <h2>AI 图像识别助手</h2>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <svg viewBox="0 0 64 64" fill="none" class="sidebar-logo">
+          <rect x="8" y="20" width="14" height="24" rx="4" fill="white" opacity="0.9"/>
+          <rect x="26" y="8" width="14" height="36" rx="4" fill="white" opacity="0.7"/>
+          <rect x="44" y="14" width="14" height="30" rx="4" fill="white" opacity="0.5"/>
+          <circle cx="16" cy="14" r="4" fill="#a78bfa"/>
+          <circle cx="34" cy="4" r="3.5" fill="#c084fc"/>
+          <circle cx="52" cy="9" r="3" fill="#e879f9"/>
+        </svg>
+        <span class="sidebar-name">DeepTalk</span>
       </div>
 
-      <div class="chat-messages" ref="chatContainerRef">
+      <div class="session-label">功能模块</div>
+
+      <ul class="session-list">
+        <li class="session-item active">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="session-icon">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+          </svg>
+          <span>图像识别助手</span>
+        </li>
+      </ul>
+
+      <div class="sidebar-footer">
+        <button class="back-menu-btn" @click="$router.push('/menu')">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+          返回菜单
+        </button>
+      </div>
+    </aside>
+
+    <main class="chat-area">
+      <div class="topbar">
+        <span class="topbar-title">AI 图像识别</span>
+        <span class="topbar-hint">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          上传图片，AI 将自动识别图像内容
+        </span>
+      </div>
+
+      <div class="messages" ref="chatContainerRef">
+        <div v-if="messages.length === 0" class="empty-state">
+          <div class="empty-icon">
+            <svg viewBox="0 0 64 64" fill="none"><rect x="8" y="12" width="48" height="40" rx="4" stroke="currentColor" stroke-width="1.5"/><circle cx="22" cy="28" r="5" stroke="currentColor" stroke-width="1.2"/><path d="M8 44l16-12 10 7 8-4 14 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <p>选择一张图片，开始识别</p>
+        </div>
+
         <div
           v-for="(message, index) in messages"
           :key="index"
-          :class="['message', message.role === 'user' ? 'user-message' : 'ai-message']"
+          :class="['bubble', message.role === 'user' ? 'bubble-user' : 'bubble-ai']"
         >
-          <div class="message-header">
-            <b>{{ message.role === 'user' ? '你' : 'AI' }}:</b>
+          <div class="bubble-meta">
+            <span class="bubble-role">{{ message.role === 'user' ? '你' : 'AI' }}</span>
           </div>
-          <div class="message-content">
+          <div class="bubble-content">
             <span>{{ message.content }}</span>
-            <img v-if="message.imageUrl" :src="message.imageUrl" alt="上传的图片" />
+            <img v-if="message.imageUrl" :src="message.imageUrl" alt="上传的图片" class="uploaded-img" />
           </div>
         </div>
       </div>
 
-      <div class="chat-input">
-        <form @submit.prevent="handleSubmit">
-          <input
-            ref="fileInputRef"
-            type="file"
-            accept="image/*"
-            required
-            @change="handleFileSelect"
-          />
-          <button type="submit" :disabled="!selectedFile">发送图片</button>
+      <div class="input-bar">
+        <form @submit.prevent="handleSubmit" class="upload-form">
+          <label class="file-label" :class="{ 'has-file': selectedFile }">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span>{{ selectedFile ? selectedFile.name : '点击选择图片' }}</span>
+            <input
+              ref="fileInputRef"
+              type="file"
+              accept="image/*"
+              required
+              @change="handleFileSelect"
+              class="file-input-hidden"
+            />
+          </label>
+          <button type="submit" :disabled="!selectedFile" class="submit-btn">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
         </form>
       </div>
-    </div>
+    </main>
   </div>
 </template>
 
@@ -63,6 +103,19 @@ export default {
     const fileInputRef = ref()
     const chatContainerRef = ref()
 
+    const dotStyle = (i) => {
+      const size = 1.5 + (i % 3) * 1.5
+      return {
+        width: size + 'px',
+        height: size + 'px',
+        left: ((i * 37 + 13) % 100) + '%',
+        top: ((i * 53 + 7) % 100) + '%',
+        animationDelay: (i * 0.7) + 's',
+        animationDuration: (4 + (i % 5)) + 's',
+        opacity: 0.06 + (i % 3) * 0.04
+      }
+    }
+
     const handleFileSelect = (event) => {
       selectedFile.value = event.target.files[0]
     }
@@ -73,155 +126,187 @@ export default {
       const file = selectedFile.value
       const imageUrl = URL.createObjectURL(file)
 
-      // Add user message to UI
       messages.value.push({
         role: 'user',
         content: `已上传图片: ${file.name}`,
-        imageUrl: imageUrl,
+        imageUrl: imageUrl
       })
 
       await nextTick()
       scrollToBottom()
 
-      // Create FormData
       const formData = new FormData()
       formData.append('image', file)
 
       try {
         const response = await api.post('/image/recognize', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
+          headers: { 'Content-Type': 'multipart/form-data' }
         })
 
-
         if (response.data && response.data.class_name) {
-             const aiText = `识别结果: ${response.data.class_name}`
-            messages.value.push({
-                role: 'assistant',
-                content: aiText,
-            })
+          const aiText = `识别结果: ${response.data.class_name}`
+          messages.value.push({ role: 'assistant', content: aiText })
         } else {
-             messages.value.push({
-                 role: 'assistant',
-                 content: `[错误] ${response.data.status_msg || '识别失败'}`,
-             })
+          messages.value.push({ role: 'assistant', content: `[错误] ${response.data.status_msg || '识别失败'}` })
         }
       } catch (error) {
         console.error('Upload error:', error)
-        messages.value.push({
-          role: 'assistant',
-          content: `[错误] 无法连接到服务器或上传失败: ${error.message}`,
-        })
+        messages.value.push({ role: 'assistant', content: `[错误] 无法连接到服务器或上传失败: ${error.message}` })
       } finally {
-
         URL.revokeObjectURL(imageUrl)
-
-            await nextTick()
+        await nextTick()
         scrollToBottom()
-
-
         selectedFile.value = null
-        if (fileInputRef.value) {
-          fileInputRef.value.value = ''
-        }
+        if (fileInputRef.value) fileInputRef.value.value = ''
       }
     }
 
     const scrollToBottom = () => {
       if (chatContainerRef.value) {
-        chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
+        try { chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight } catch (e) { /* scroll not available */ }
       }
     }
 
     return {
-      messages,
-      selectedFile,
-      fileInputRef,
-      chatContainerRef,
-      handleFileSelect,
-      handleSubmit
+      messages, selectedFile, fileInputRef, chatContainerRef,
+      dotStyle, handleFileSelect, handleSubmit
     }
   }
 }
 </script>
 
 <style scoped>
-.image-recognition-container {
+.page {
   height: 100vh;
   display: flex;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  position: relative;
-  overflow: hidden;
+  background: #0f0f1a;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-  color: #222;
+  overflow: hidden;
+  position: relative;
 }
 
-.image-recognition-container::before {
-  content: '';
+.particles {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="20" cy="20" r="2" fill="rgba(255,255,255,0.08)"/><circle cx="80" cy="80" r="2" fill="rgba(255,255,255,0.08)"/><circle cx="40" cy="60" r="1" fill="rgba(255,255,255,0.06)"/><circle cx="60" cy="30" r="1.5" fill="rgba(255,255,255,0.06)"/></svg>');
-  animation: float 20s ease-in-out infinite;
-  opacity: 0.25;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
 }
 
-@keyframes float {
-  0%, 100% { transform: translateY(0px) rotate(0deg); }
-  50% { transform: translateY(-20px) rotate(180deg); }
+.dot {
+  position: absolute;
+  border-radius: 50%;
+  background: white;
+  animation: drift linear infinite;
+}
+
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0); }
+  25%  { transform: translate(8px, -12px); }
+  50%  { transform: translate(-4px, -6px); }
+  75%  { transform: translate(-10px, 4px); }
+}
+
+/* ==================== Sidebar ==================== */
+
+.sidebar {
+  width: 260px;
+  background: rgba(22, 22, 40, 0.95);
+  backdrop-filter: blur(24px);
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 20px 16px;
+}
+
+.sidebar-logo {
+  width: 30px;
+  height: 30px;
+}
+
+.sidebar-name {
+  color: white;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+.session-label {
+  padding: 12px 20px 10px;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
 }
 
 .session-list {
-  width: 280px;
-  height: 100vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(15px);
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 2px 0 20px rgba(0, 0, 0, 0.08);
-  position: relative;
-  z-index: 2;
-}
-
-.session-list-header {
-  padding: 20px;
-  text-align: center;
-  font-weight: 600;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.06) 0%, rgba(103, 194, 58, 0.06) 100%);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.session-list-ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
   flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 0 10px;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .session-item {
-  padding: 15px 20px;
-  cursor: pointer;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.03);
-  transition: all 0.2s ease;
-  position: relative;
-  color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  margin-bottom: 2px;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
 }
 
 .session-item.active {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  font-weight: 600;
-  box-shadow: inset 0 0 20px rgba(102, 126, 234, 0.2);
+  background: rgba(124, 58, 237, 0.15);
+  color: #c4b5fd;
+  font-weight: 500;
 }
 
-/* chat section */
-.chat-section {
+.session-icon {
+  flex-shrink: 0;
+}
+
+.sidebar-footer {
+  padding: 14px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.back-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: none;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.back-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ==================== Chat Area ==================== */
+
+.chat-area {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -229,234 +314,207 @@ export default {
   z-index: 1;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
 }
 
-.top-bar {
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  color: #2c3e50;
+.topbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   padding: 12px 24px;
-  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.06);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  gap: 12px;
+  background: rgba(22, 22, 40, 0.7);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  z-index: 3;
 }
 
-.back-btn {
-  background: rgba(255, 255, 255, 0.22);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  color: #2c3e50;
-  padding: 8px 14px;
-  border-radius: 10px;
-  cursor: pointer;
-  font-weight: 600;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-
-.back-btn:hover {
-  background: rgba(255, 255, 255, 0.32);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
-}
-
-.top-bar h2 {
-  margin: 0;
-  font-size: 24px;
+.topbar-title {
+  color: white;
+  font-size: 15px;
   font-weight: 600;
 }
 
-.chat-messages {
+.topbar-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 12px;
+}
+
+/* ==================== Messages ==================== */
+
+.messages {
   flex: 1;
-  min-height: 0;
   overflow-y: auto;
-  padding: 30px;
+  padding: 28px 32px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  position: relative;
-  z-index: 1;
+  gap: 16px;
 }
 
-/* scrollbar */
-.chat-messages::-webkit-scrollbar {
-  width: 8px;
-}
-.chat-messages::-webkit-scrollbar-thumb {
-  background: rgba(0,0,0,0.12);
-  border-radius: 8px;
-}
-.chat-messages::-webkit-scrollbar-track {
-  background: transparent;
+.messages::-webkit-scrollbar { width: 6px; }
+.messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 6px; }
+.messages::-webkit-scrollbar-track { background: transparent; }
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.15);
+  gap: 16px;
 }
 
-.message {
+.empty-icon {
+  width: 80px;
+  height: 80px;
+  opacity: 0.4;
+}
+
+.empty-state p {
+  font-size: 14px;
+  margin: 0;
+}
+
+.bubble {
   max-width: 70%;
   padding: 14px 18px;
-  border-radius: 18px;
+  border-radius: 16px;
   line-height: 1.6;
   word-wrap: break-word;
-  position: relative;
-  animation: messageSlideIn 0.28s ease-out;
-  font-size: 15px;
-  box-sizing: border-box;
+  font-size: 14px;
+  animation: bubbleIn 0.25s ease-out;
 }
 
-@keyframes messageSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(12px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.user-message {
+.bubble-user {
   align-self: flex-end;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #7c3aed, #a855f7);
   color: white;
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.16);
+  border-bottom-right-radius: 6px;
 }
 
-.user-message::after {
-  content: '';
-  position: absolute;
-  bottom: -6px;
-  right: 18px;
-  width: 0;
-  height: 0;
-  border-left: 8px solid transparent;
-  border-right: 8px solid transparent;
-  border-top: 8px solid #764ba2;
-}
-
-.ai-message {
+.bubble-ai {
   align-self: flex-start;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(4px);
-  color: #2c3e50;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(26, 26, 46, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+  border-bottom-left-radius: 6px;
 }
 
-.ai-message::after {
-  content: '';
-  position: absolute;
-  bottom: -6px;
-  left: 18px;
-  width: 0;
-  height: 0;
-  border-left: 8px solid transparent;
-  border-right: 8px solid transparent;
-  border-top: 8px solid rgba(255, 255, 255, 0.95);
-}
-
-.message-header {
+.bubble-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 
-.message-header b {
+.bubble-role {
+  font-size: 11px;
   font-weight: 600;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-/* message content */
-.message-content {
+.bubble-content {
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.message-content img {
-  max-width: 250px;
+.uploaded-img {
+  max-width: 260px;
   border-radius: 12px;
   display: block;
   margin-top: 12px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.message-content img:hover {
-  transform: scale(1.05);
+/* ==================== Input ==================== */
+
+.input-bar {
+  padding: 16px 24px 20px;
+  background: rgba(22, 22, 40, 0.7);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  z-index: 3;
 }
 
-/* input area */
-.chat-input {
-  padding: 24px;
-  background: rgba(255, 255, 255, 0.96);
-  backdrop-filter: blur(8px);
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  position: relative;
-  z-index: 1;
-}
-
-.chat-input form {
+.upload-form {
   display: flex;
-  gap: 20px;
+  align-items: center;
+  gap: 12px;
 }
 
-.chat-input input[type="file"] {
+.file-label {
   flex: 1;
-  border: 2px dashed #d9d9d9;
-  border-radius: 12px;
-  padding: 15px 20px;
-  background: rgba(255, 255, 255, 0.8);
-  color: #666;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 13px;
   cursor: pointer;
-  transition: all 0.3s ease;
-  font-size: 14px;
+  transition: all 0.25s;
 }
 
-.chat-input input[type="file"]:hover {
-  border-color: #409eff;
-  background: rgba(64, 158, 255, 0.05);
+.file-label:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.02);
 }
 
-.chat-input input[type="file"]::file-selector-button {
+.file-label.has-file {
+  border-style: solid;
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.file-input-hidden {
+  display: none;
+}
+
+.submit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
   border: none;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 8px 16px;
-  border-radius: 8px;
+  background: linear-gradient(135deg, #7c3aed, #a855f7);
   color: white;
   cursor: pointer;
-  font-weight: 600;
-  margin-right: 12px;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 10px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s;
+  flex-shrink: 0;
 }
 
-.chat-input input[type="file"]::file-selector-button:hover {
+.submit-btn:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.35);
 }
 
-.chat-input button {
-  padding: 15px 30px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-}
-
-.chat-input button:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
-}
-
-.chat-input button:disabled {
-  background: #ccc;
-  box-shadow: none;
+.submit-btn:disabled {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.15);
   cursor: not-allowed;
-  transform: none;
+}
+
+/* ==================== Responsive ==================== */
+
+@media (max-width: 768px) {
+  .sidebar { width: 200px; }
+  .messages { padding: 20px 16px; }
+  .topbar { padding: 10px 16px; flex-wrap: wrap; gap: 8px; }
+  .topbar-hint { display: none; }
+  .input-bar { padding: 12px 16px; }
 }
 </style>

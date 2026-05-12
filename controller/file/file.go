@@ -1,9 +1,9 @@
 package file
 
 import (
-	"GopherAI/common/code"
-	"GopherAI/controller"
-	"GopherAI/service/file"
+	"deeptalk/common/code"
+	"deeptalk/controller"
+	"deeptalk/service/file"
 	"log"
 	"net/http"
 

@@ -1,11 +1,11 @@
 package session
 
 import (
-	"GopherAI/common/aihelper"
-	"GopherAI/common/code"
-	"GopherAI/dao/session"
-	"GopherAI/model"
 	"context"
+	"deeptalk/common/aihelper"
+	"deeptalk/common/code"
+	"deeptalk/dao/session"
+	"deeptalk/model"
 	"log"
 	"net/http"
 
@@ -48,8 +48,7 @@ func CreateSessionAndSendMessage(userName string, userQuestion string, modelType
 	//2：获取AIHelper并通过其管理消息
 	manager := aihelper.GetGlobalManager()
 	config := map[string]interface{}{
-		"apiKey":   "your-api-key", // TODO: 从配置中获取
-		"username": userName,       // 用于 RAG 模型获取用户文档
+		"username": userName, // 用于 RAG 模型获取用户文档
 	}
 	helper, err := manager.GetOrCreateAIHelper(userName, createdSession.ID, modelType, config)
 	if err != nil {

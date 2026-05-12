@@ -1,10 +1,10 @@
 package rag
 
 import (
-	"GopherAI/common/redis"
-	redisPkg "GopherAI/common/redis"
-	"GopherAI/config"
 	"context"
+	"deeptalk/common/redis"
+	redisPkg "deeptalk/common/redis"
+	"deeptalk/config"
 	"fmt"
 	"os"
 

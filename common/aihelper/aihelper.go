@@ -1,10 +1,10 @@
 package aihelper
 
 import (
-	"GopherAI/common/rabbitmq"
-	"GopherAI/model"
-	"GopherAI/utils"
 	"context"
+	"deeptalk/common/rabbitmq"
+	"deeptalk/model"
+	"deeptalk/utils"
 	"sync"
 )
 

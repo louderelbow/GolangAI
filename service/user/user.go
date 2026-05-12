@@ -1,13 +1,13 @@
 package user
 
 import (
-	"GopherAI/common/code"
-	myemail "GopherAI/common/email"
-	myredis "GopherAI/common/redis"
-	"GopherAI/dao/user"
-	"GopherAI/model"
-	"GopherAI/utils"
-	"GopherAI/utils/myjwt"
+	"deeptalk/common/code"
+	myemail "deeptalk/common/email"
+	myredis "deeptalk/common/redis"
+	"deeptalk/dao/user"
+	"deeptalk/model"
+	"deeptalk/utils"
+	"deeptalk/utils/myjwt"
 )
 
 func Login(username, password string) (string, code.Code) {

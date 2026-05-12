@@ -1,8 +1,8 @@
 package redis
 
 import (
-	"GopherAI/config"
 	"context"
+	"deeptalk/config"
 	"fmt"
 	"strconv"
 	"strings"

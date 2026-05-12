@@ -1,8 +1,8 @@
 package utils
 
 import (
-	"GopherAI/model"
 	"crypto/md5"
+	"deeptalk/model"
 	"encoding/hex"
 	"fmt"
 	"math/rand"

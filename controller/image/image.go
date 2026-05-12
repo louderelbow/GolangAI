@@ -1,9 +1,9 @@
 package image
 
 import (
-	"GopherAI/common/code"
-	"GopherAI/controller"
-	"GopherAI/service/image"
+	"deeptalk/common/code"
+	"deeptalk/controller"
+	"deeptalk/service/image"
 	"log"
 	"net/http"
 

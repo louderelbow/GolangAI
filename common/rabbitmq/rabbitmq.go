@@ -1,7 +1,7 @@
 package rabbitmq
 
 import (
-	"GopherAI/config"
+	"deeptalk/config"
 	"fmt"
 	"log"
 

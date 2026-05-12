@@ -1,8 +1,8 @@
 package session
 
 import (
-	"GopherAI/common/mysql"
-	"GopherAI/model"
+	"deeptalk/common/mysql"
+	"deeptalk/model"
 )
 
 func GetSessionsByUserName(UserName int64) ([]model.Session, error) {

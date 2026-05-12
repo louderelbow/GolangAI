@@ -1,12 +1,12 @@
--- GopherAI 数据库初始化脚本
--- 数据库名称: gopherai
+-- DeepTalk 数据库初始化脚本
+-- 数据库名称: DeepTalk
 -- 字符集: utf8mb4
 
-CREATE DATABASE IF NOT EXISTS `gopherai`
+CREATE DATABASE IF NOT EXISTS `deeptalk`
   DEFAULT CHARACTER SET utf8mb4
   DEFAULT COLLATE utf8mb4_unicode_ci;
 
-USE `gopherai`;
+USE `deeptalk`;
 
 -- ----------------------------
 -- Table structure for users

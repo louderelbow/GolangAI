@@ -1,10 +1,10 @@
 package session
 
 import (
-	"GopherAI/common/code"
-	"GopherAI/controller"
-	"GopherAI/model"
-	"GopherAI/service/session"
+	"deeptalk/common/code"
+	"deeptalk/controller"
+	"deeptalk/model"
+	"deeptalk/service/session"
 	"fmt"
 	"net/http"
 
@@ -153,7 +153,6 @@ func ChatStreamSend(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("Access-Control-Allow-Origin", "*")
 	c.Header("X-Accel-Buffering", "no") // 禁止代理缓存
-
 
 	code_ := session.ChatStreamSend(userName, req.SessionID, req.UserQuestion, req.ModelType, http.ResponseWriter(c.Writer))
 	if code_ != code.CodeSuccess {

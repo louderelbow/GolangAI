@@ -1,9 +1,9 @@
 package tts
 
 import (
-	"GopherAI/common/code"
-	"GopherAI/common/tts"
-	"GopherAI/controller"
+	"deeptalk/common/code"
+	"deeptalk/common/tts"
+	"deeptalk/controller"
 	"log"
 	"net/http"
 

@@ -1,8 +1,8 @@
 package rabbitmq
 
 import (
-	"GopherAI/dao/message"
-	"GopherAI/model"
+	"deeptalk/dao/message"
+	"deeptalk/model"
 	"encoding/json"
 
 	"github.com/streadway/amqp"

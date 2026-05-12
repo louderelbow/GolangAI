@@ -1,4 +1,4 @@
-module github.com/kaitai/gopherai-mcp
+module github.com/kaitai/deeptalk-mcp
 
 go 1.25.4
 

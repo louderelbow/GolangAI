@@ -1,13 +1,13 @@
 package main
 
 import (
-	"GopherAI/common/aihelper"
-	"GopherAI/common/mysql"
-	"GopherAI/common/rabbitmq"
-	"GopherAI/common/redis"
-	"GopherAI/config"
-	"GopherAI/dao/message"
-	"GopherAI/router"
+	"deeptalk/common/aihelper"
+	"deeptalk/common/mysql"
+	"deeptalk/common/rabbitmq"
+	"deeptalk/common/redis"
+	"deeptalk/config"
+	"deeptalk/dao/message"
+	"deeptalk/router"
 	"fmt"
 	"log"
 )

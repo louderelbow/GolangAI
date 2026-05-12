@@ -1,7 +1,7 @@
 package myjwt
 
 import (
-	"GopherAI/config"
+	"deeptalk/config"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"

@@ -1,9 +1,9 @@
 package jwt
 
 import (
-	"GopherAI/common/code"
-	"GopherAI/controller"
-	"GopherAI/utils/myjwt"
+	"deeptalk/common/code"
+	"deeptalk/controller"
+	"deeptalk/utils/myjwt"
 	"log"
 	"net/http"
 	"strings"

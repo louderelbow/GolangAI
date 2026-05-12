@@ -1,9 +1,9 @@
 package user
 
 import (
-	"GopherAI/common/code"
-	"GopherAI/controller"
-	"GopherAI/service/user"
+	"deeptalk/common/code"
+	"deeptalk/controller"
+	"deeptalk/service/user"
 	"net/http"
 
 	"github.com/gin-gonic/gin"

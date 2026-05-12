@@ -1,10 +1,10 @@
 package file
 
 import (
-	"GopherAI/common/rag"
-	"GopherAI/config"
-	"GopherAI/utils"
 	"context"
+	"deeptalk/common/rag"
+	"deeptalk/config"
+	"deeptalk/utils"
 	"io"
 	"log"
 	"mime/multipart"

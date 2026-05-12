@@ -1,7 +1,7 @@
 package router
 
 import (
-	"GopherAI/controller/user"
+	"deeptalk/controller/user"
 
 	"github.com/gin-gonic/gin"
 )

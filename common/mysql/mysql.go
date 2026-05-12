@@ -1,8 +1,8 @@
 package mysql
 
 import (
-	"GopherAI/config"
-	"GopherAI/model"
+	"deeptalk/config"
+	"deeptalk/model"
 	"fmt"
 	"time"
 

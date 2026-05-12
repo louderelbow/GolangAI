@@ -1,9 +1,9 @@
 package aihelper
 
 import (
-	"GopherAI/common/rag"
-	"GopherAI/config"
 	"context"
+	"deeptalk/common/rag"
+	"deeptalk/config"
 	"encoding/json"
 	"fmt"
 	"io"
