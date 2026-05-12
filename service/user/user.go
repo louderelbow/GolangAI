@@ -19,7 +19,7 @@ func Login(username, password string) (string, code.Code) {
 		return "", code.CodeUserNotExist
 	}
 	//2:判断用户是否密码账号正确
-	if userInformation.Password != utils.MD5(password) {
+	if !utils.CheckPassword(userInformation.Password, password) {
 		return "", code.CodeInvalidPassword
 	}
 	//3:返回一个Token

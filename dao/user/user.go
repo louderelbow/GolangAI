@@ -29,11 +29,15 @@ func IsExistUser(username string) (bool, *model.User) {
 }
 
 func Register(username, email, password string) (*model.User, bool) {
+	hashedPassword, err := utils.HashPassword(password)
+	if err != nil {
+		return nil, false
+	}
 	if user, err := mysql.InsertUser(&model.User{
 		Email:    email,
 		Name:     username,
 		Username: username,
-		Password: utils.MD5(password),
+		Password: hashedPassword,
 	}); err != nil {
 		return nil, false
 	} else {

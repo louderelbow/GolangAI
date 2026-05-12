@@ -1,9 +1,7 @@
 package utils
 
 import (
-	"crypto/md5"
 	"deeptalk/model"
-	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"mime/multipart"
@@ -15,6 +13,7 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func GetRandomNumbers(num int) string {
@@ -29,11 +28,17 @@ func GetRandomNumbers(num int) string {
 	return code
 }
 
-// MD5 MD5加密
-func MD5(str string) string {
-	m := md5.New()
-	m.Write([]byte(str))
-	return hex.EncodeToString(m.Sum(nil))
+func HashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
+}
+
+func CheckPassword(hashedPassword, password string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+	return err == nil
 }
 
 func GenerateUUID() string {
