@@ -54,9 +54,11 @@ func (f *AIModelFactory) registerCreators() {
 		return NewMCPModel(ctx, username)
 	}
 
-	//Ollama（目前提供接口实现，暂不提供应用，因为考虑到本地模型会占用很多空间）todo做
 	f.creators["4"] = func(ctx context.Context, config map[string]interface{}) (AIModel, error) {
 		baseURL, _ := config["baseURL"].(string)
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
 		modelName, ok := config["modelName"].(string)
 		if !ok {
 			return nil, fmt.Errorf("Ollama model requires modelName")

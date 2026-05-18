@@ -7,6 +7,7 @@ import (
 	"deeptalk/config"
 	"fmt"
 	"os"
+	"strings"
 
 	embeddingArk "github.com/cloudwego/eino-ext/components/embedding/ark"
 	redisIndexer "github.com/cloudwego/eino-ext/components/indexer/redis"
@@ -137,18 +138,11 @@ func (r *RAGIndexer) IndexFile(ctx context.Context, filePath string) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// 将文件内容转换为文档
-	// TODO: 这里可以根据需要进行文本切块，目前简单处理为一个文档
-	doc := &schema.Document{
-		ID:      "doc_1", // 可以使用 UUID 或其他唯一标识
-		Content: string(content),
-		MetaData: map[string]any{
-			"source": filePath,
-		},
-	}
+	// 将文件内容转换为文档并进行文本切块
+	docs := splitDocument(content, filePath)
 
 	// 使用 indexer 存储文档（会自动进行向量化）
-	_, err = r.indexer.Store(ctx, []*schema.Document{doc})
+	_, err = r.indexer.Store(ctx, docs)
 	if err != nil {
 		return fmt.Errorf("failed to store document: %w", err)
 	}
@@ -270,4 +264,50 @@ func BuildRAGPrompt(query string, docs []*schema.Document) string {
 请提供准确、完整的回答：`, contextText, query)
 
 	return prompt
+}
+
+// splitDocument 将文档内容按段落切分成多个小块
+func splitDocument(content []byte, filePath string) []*schema.Document {
+	text := string(content)
+	docs := make([]*schema.Document, 0)
+
+	// 按换行符分割段落
+	paragraphs := strings.Split(text, "\n\n")
+	chunkSize := 500
+	chunkOverlap := 50
+
+	for i, paragraph := range paragraphs {
+		paragraph = strings.TrimSpace(paragraph)
+		if paragraph == "" {
+			continue
+		}
+
+		// 如果段落过长，进一步切分
+		if len(paragraph) > chunkSize {
+			for j := 0; j < len(paragraph); j += chunkSize - chunkOverlap {
+				end := j + chunkSize
+				if end > len(paragraph) {
+					end = len(paragraph)
+				}
+				docs = append(docs, &schema.Document{
+					ID:      fmt.Sprintf("doc_%d_%d", i, j),
+					Content: paragraph[j:end],
+					MetaData: map[string]any{
+						"source": filePath,
+						"chunk":  fmt.Sprintf("%d-%d", j, end),
+					},
+				})
+			}
+		} else {
+			docs = append(docs, &schema.Document{
+				ID:      fmt.Sprintf("doc_%d", i),
+				Content: paragraph,
+				MetaData: map[string]any{
+					"source": filePath,
+				},
+			})
+		}
+	}
+
+	return docs
 }

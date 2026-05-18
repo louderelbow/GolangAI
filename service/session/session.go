@@ -90,8 +90,7 @@ func StreamMessageToExistingSession(userName string, sessionID string, userQuest
 
 	manager := aihelper.GetGlobalManager()
 	config := map[string]interface{}{
-		"apiKey":   "your-api-key", // TODO: 从配置中获取
-		"username": userName,       // 用于 RAG 模型获取用户文档
+		"username": userName, // 用于 RAG 模型获取用户文档
 	}
 	helper, err := manager.GetOrCreateAIHelper(userName, sessionID, modelType, config)
 	if err != nil {
