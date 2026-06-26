@@ -4,6 +4,7 @@ import (
 	"deeptalk/dao/message"
 	"deeptalk/model"
 	"encoding/json"
+	"log"
 
 	"github.com/streadway/amqp"
 )
@@ -39,6 +40,9 @@ func MQMessage(msg *amqp.Delivery) error {
 		IsUser:    param.IsUser,
 	}
 	//消费者异步插入到数据库中
-	message.CreateMessage(newMsg)
+	if _, err := message.CreateMessage(newMsg); err != nil {
+		log.Printf("[MQMessage] failed to create message: %v", err)
+		return err
+	}
 	return nil
 }

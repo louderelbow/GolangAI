@@ -23,7 +23,7 @@ func initConn() {
 	var err error
 	conn, err = amqp.Dial(mqUrl)
 	if err != nil {
-		log.Fatalf("RabbitMQ connection failed: %v", err) // 输出错误并退出程序
+		log.Printf("RabbitMQ connection failed: %v, server will run without MQ", err)
 	}
 }
 
@@ -55,13 +55,18 @@ func NewWorkRabbitMQ(queue string) *RabbitMQ {
 	if conn == nil {
 		initConn()
 	}
+	if conn == nil {
+		log.Println("[RabbitMQ] connection unavailable, NewWorkRabbitMQ returns nil")
+		return nil
+	}
 	rabbitmq.conn = conn
 
 	// get channel
 	var err error
 	rabbitmq.channel, err = rabbitmq.conn.Channel()
 	if err != nil {
-		panic(err.Error())
+		log.Printf("[RabbitMQ] create channel failed: %v", err)
+		return nil
 	}
 
 	return rabbitmq
@@ -90,8 +95,8 @@ func (r *RabbitMQ) Consume(handle func(msg *amqp.Delivery) error) {
 		panic(err)
 	}
 
-	// 接收消息
-	msgs, err := r.channel.Consume(q.Name, "", true, false, false, false, nil)
+	// 接收消息 — autoAck=false，手动确认
+	msgs, err := r.channel.Consume(q.Name, "", false, false, false, false, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -100,6 +105,11 @@ func (r *RabbitMQ) Consume(handle func(msg *amqp.Delivery) error) {
 	for msg := range msgs {
 		if err := handle(&msg); err != nil {
 			fmt.Println(err.Error())
+			// 处理失败，重新入队
+			_ = msg.Nack(false, true)
+		} else {
+			// 处理成功，确认消费
+			_ = msg.Ack(false)
 		}
 	}
 }

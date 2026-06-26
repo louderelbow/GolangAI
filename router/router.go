@@ -1,14 +1,18 @@
 package router
 
 import (
+	"deeptalk/common/logger"
 	"deeptalk/middleware/jwt"
+	mw "deeptalk/middleware"
 
 	"github.com/gin-gonic/gin"
 )
 
 func InitRouter() *gin.Engine {
+	logger.Init("info")
 
 	r := gin.Default()
+	r.Use(mw.RequestID())
 	enterRouter := r.Group("/api/v1")
 	{
 		RegisterUserRouter(enterRouter.Group("/user"))
@@ -17,6 +21,7 @@ func InitRouter() *gin.Engine {
 	{
 		AIGroup := enterRouter.Group("/AI")
 		AIGroup.Use(jwt.Auth())
+		AIGroup.Use(mw.RateLimit())
 		AIRouter(AIGroup)
 	}
 

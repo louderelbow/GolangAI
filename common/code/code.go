@@ -21,6 +21,7 @@ const (
 	CodeForbidden Code = 3001
 
 	CodeServerBusy Code = 4001
+	CodeRateLimited Code = 4002
 
 	AIModelNotFind    Code = 5001
 	AIModelCannotOpen Code = 5002
@@ -45,7 +46,8 @@ var msg = map[Code]string{
 
 	CodeForbidden: "权限不足",
 
-	CodeServerBusy: "服务繁忙",
+	CodeServerBusy:  "服务繁忙",
+	CodeRateLimited: "请求过于频繁，请稍后再试",
 
 	AIModelNotFind:    "模型不存在",
 	AIModelCannotOpen: "无法打开模型",

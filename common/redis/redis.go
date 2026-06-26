@@ -51,6 +51,7 @@ func CheckCaptchaForEmail(email, userInput string) (bool, error) {
 		return false, err
 	}
 
+	// 不区分大小写判断字符串是否相同
 	if strings.EqualFold(storedCaptcha, userInput) {
 
 		// 验证成功后删除 key

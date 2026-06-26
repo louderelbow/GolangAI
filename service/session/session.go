@@ -15,17 +15,19 @@ import (
 var ctx = context.Background()
 
 func GetUserSessionsByUserName(userName string) ([]model.SessionInfo, error) {
-	//获取用户的所有会话ID
-
-	manager := aihelper.GetGlobalManager()
-	Sessions := manager.GetUserSessions(userName)
+	//从数据库获取用户的所有会话信息
+	Sessions, err := session.GetSessionsByUserName(userName)
+	if err != nil {
+		log.Println("GetUserSessionsByUserName GetSessionsByUserName error:", err)
+		return nil, err
+	}
 
 	var SessionInfos []model.SessionInfo
 
-	for _, session := range Sessions {
+	for _, s := range Sessions {
 		SessionInfos = append(SessionInfos, model.SessionInfo{
-			SessionID: session,
-			Title:     session, // 暂时用sessionID作为标题，后续重构需要的时候可以更改
+			SessionID: s.ID,
+			Title:     s.Title, // 使用数据库中保存的标题（用户的第一个问题）
 		})
 	}
 

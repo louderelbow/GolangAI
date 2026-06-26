@@ -5,7 +5,7 @@ import (
 	"deeptalk/model"
 )
 
-func GetSessionsByUserName(UserName int64) ([]model.Session, error) {
+func GetSessionsByUserName(UserName string) ([]model.Session, error) {
 	var sessions []model.Session
 	err := mysql.DB.Where("user_name = ?", UserName).Find(&sessions).Error
 	return sessions, err

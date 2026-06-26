@@ -1,222 +1,145 @@
 package image
 
 import (
-	"bufio"
 	"bytes"
-	"errors"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
+	"io"
+	"net/http"
 	"os"
-	"path/filepath"
-	"sync"
 
-	ort "github.com/yalue/onnxruntime_go"
-	"golang.org/x/image/draw"
+	"deeptalk/config"
 )
+
+// ======================== 阿里云 DashScope 视觉识别 ========================
+// 使用 config.toml 中 ragModelConfig 的 baseUrl + apiKey
+// 调用 qwen-vl 多模态模型进行图像理解，替代 ONNX MobileNetV2 本地推理
 
 type ImageRecognizer struct {
-	session      *ort.Session[float32]
-	inputName    string
-	outputName   string
-	inputH       int
-	inputW       int
-	labels       []string
-	inputTensor  *ort.Tensor[float32]
-	outputTensor *ort.Tensor[float32]
+	apiKey  string
+	baseURL string
+	model   string
 }
 
-const (
-	defaultInputName  = "data"
-	defaultOutputName = "mobilenetv20_output_flatten0_reshape0"
-)
-
-var (
-	initOnce sync.Once
-	initErr  error
-)
-
-// NewImageRecognizer 创建识别器（自动使用默认 input/output 名称）
 func NewImageRecognizer(modelPath, labelPath string, inputH, inputW int) (*ImageRecognizer, error) {
-	if inputH <= 0 || inputW <= 0 {
-		inputH, inputW = 224, 224
+	conf := config.GetConfig()
+	apiKey := conf.RagModelConfig.RagApiKey
+	if apiKey == "" {
+		apiKey = os.Getenv("ALIYUN_API_KEY")
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("DEEPSEEK_API_KEY")
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 
-	// 初始化 ONNX 环境（全局一次）
-	initOnce.Do(func() {
-		initErr = ort.InitializeEnvironment()
-	})
-	if initErr != nil {
-		return nil, fmt.Errorf("onnxruntime initialize error: %w", initErr)
-	}
-
-	// 预先创建输入输出 Tensor
-	inputShape := ort.NewShape(1, 3, int64(inputH), int64(inputW))
-	inData := make([]float32, inputShape.FlattenedSize())
-	inTensor, err := ort.NewTensor(inputShape, inData)
-	if err != nil {
-		return nil, fmt.Errorf("create input tensor failed: %w", err)
-	}
-
-	outShape := ort.NewShape(1, 1000)
-	outTensor, err := ort.NewEmptyTensor[float32](outShape)
-	if err != nil {
-		inTensor.Destroy()
-		return nil, fmt.Errorf("create output tensor failed: %w", err)
-	}
-
-	// 创建 Session
-	session, err := ort.NewSession[float32](
-		modelPath,
-		[]string{defaultInputName},
-		[]string{defaultOutputName},
-		[]*ort.Tensor[float32]{inTensor},
-		[]*ort.Tensor[float32]{outTensor},
-	)
-	if err != nil {
-		inTensor.Destroy()
-		outTensor.Destroy()
-		return nil, fmt.Errorf("create onnx session failed: %w", err)
-	}
-
-	// 读取 label 文件
-	labels, err := loadLabels(labelPath)
-	if err != nil {
-		session.Destroy()
-		inTensor.Destroy()
-		outTensor.Destroy()
-		return nil, err
+	baseURL := conf.RagModelConfig.RagBaseUrl
+	if baseURL == "" {
+		baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 	}
 
 	return &ImageRecognizer{
-		session:      session,
-		inputName:    defaultInputName,
-		outputName:   defaultOutputName,
-		inputH:       inputH,
-		inputW:       inputW,
-		labels:       labels,
-		inputTensor:  inTensor,
-		outputTensor: outTensor,
+		apiKey:  apiKey,
+		baseURL: baseURL,
+		model:   "qwen-vl-plus",
 	}, nil
 }
 
-func (r *ImageRecognizer) Close() {
-	if r.session != nil {
-		_ = r.session.Destroy()
-		r.session = nil
-	}
-	if r.inputTensor != nil {
-		_ = r.inputTensor.Destroy()
-		r.inputTensor = nil
-	}
-	if r.outputTensor != nil {
-		_ = r.outputTensor.Destroy()
-		r.outputTensor = nil
-	}
-}
+func (r *ImageRecognizer) Close() {}
 
+// PredictFromFile 从文件路径识别图像
 func (r *ImageRecognizer) PredictFromFile(imagePath string) (string, error) {
-	file, err := os.Open(filepath.Clean(imagePath))
+	data, err := os.ReadFile(imagePath)
 	if err != nil {
-		return "", fmt.Errorf("image not found: %w", err)
+		return "", fmt.Errorf("read image file: %w", err)
 	}
-	defer file.Close()
-
-	img, _, err := image.Decode(file)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode image: %w", err)
-	}
-
-	return r.PredictFromImage(img)
+	return r.callVisionAPI(data)
 }
 
+// PredictFromBuffer 从字节缓冲识别图像
 func (r *ImageRecognizer) PredictFromBuffer(buf []byte) (string, error) {
-	img, _, err := image.Decode(bytes.NewReader(buf))
-	if err != nil {
-		return "", fmt.Errorf("failed to decode image from buffer: %w", err)
-	}
-	return r.PredictFromImage(img)
+	return r.callVisionAPI(buf)
 }
 
-
+// PredictFromImage 从 image.Image 识别（暂不支持，请使用 PredictFromFile 或 PredictFromBuffer）
 func (r *ImageRecognizer) PredictFromImage(img image.Image) (string, error) {
-
-	resizedImg := image.NewRGBA(image.Rect(0, 0, r.inputW, r.inputH))
-
-
-	draw.CatmullRom.Scale(resizedImg, resizedImg.Bounds(), img, img.Bounds(), draw.Over, nil)
-
-	h, w := r.inputH, r.inputW
-	ch := 3 // R, G, B
-	data := make([]float32, h*w*ch)
-
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			c := resizedImg.At(x, y)
-
-			r, g, b, _ := c.RGBA()
-
-
-			rf := float32(r>>8) / 255.0
-			gf := float32(g>>8) / 255.0
-			bf := float32(b>>8) / 255.0
-
-			// NCHW format
-			data[y*w+x] = rf
-			data[h*w+y*w+x] = gf
-			data[2*h*w+y*w+x] = bf
-		}
-	}
-
-	inData := r.inputTensor.GetData()
-	copy(inData, data)
-
-	if err := r.session.Run(); err != nil {
-		return "", fmt.Errorf("onnx run error: %w", err)
-	}
-
-	outData := r.outputTensor.GetData()
-	if len(outData) == 0 {
-		return "", errors.New("empty output from model")
-	}
-
-	maxIdx := 0
-	maxVal := outData[0]
-	for i := 1; i < len(outData); i++ {
-		if outData[i] > maxVal {
-			maxVal = outData[i]
-			maxIdx = i
-		}
-	}
-
-	if maxIdx >= 0 && maxIdx < len(r.labels) {
-		return r.labels[maxIdx], nil
-	}
-	return "Unknown", nil
+	return "", fmt.Errorf("PredictFromImage not implemented, use PredictFromFile or PredictFromBuffer")
 }
 
-func loadLabels(path string) ([]string, error) {
-	f, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		return nil, fmt.Errorf("open label file failed: %w", err)
-	}
-	defer f.Close()
+// callVisionAPI 调用阿里云 DashScope 多模态 API
+func (r *ImageRecognizer) callVisionAPI(imageData []byte) (string, error) {
+	// Base64 编码图片
+	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
 
-	var labels []string
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		if line != "" {
-			labels = append(labels, line)
-		}
+	// 构造 OpenAI 兼容格式的 multimodal 请求
+	reqBody := map[string]interface{}{
+		"model": r.model,
+		"messages": []map[string]interface{}{
+			{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"type": "image_url",
+						"image_url": map[string]string{
+							"url": "data:image/jpeg;base64," + imageBase64,
+						},
+					},
+					{
+						"type": "text",
+						"text": "请识别这张图片的内容，用中文简短描述图片里有什么。如果是物体或动物，给出具体的名称。",
+					},
+				},
+			},
+		},
+		"max_tokens": 200,
 	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("read labels failed: %w", err)
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
 	}
-	if len(labels) == 0 {
-		return nil, fmt.Errorf("no labels found in %s", path)
+
+	url := r.baseURL + "/chat/completions"
+	req, err := http.NewRequest("POST", url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
 	}
-	return labels, nil
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+r.apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("api call failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("api returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// 解析 OpenAI 格式响应
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "未识别到内容", nil
+	}
+
+	return result.Choices[0].Message.Content, nil
 }

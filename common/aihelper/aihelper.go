@@ -5,6 +5,7 @@ import (
 	"deeptalk/common/rabbitmq"
 	"deeptalk/model"
 	"deeptalk/utils"
+	"log"
 	"sync"
 )
 
@@ -26,8 +27,12 @@ func NewAIHelper(model_ AIModel, SessionID string) *AIHelper {
 		//异步推送到消息队列中
 		saveFunc: func(msg *model.Message) (*model.Message, error) {
 			data := rabbitmq.GenerateMessageMQParam(msg.SessionID, msg.Content, msg.UserName, msg.IsUser)
-			err := rabbitmq.RMQMessage.Publish(data)
-			return msg, err
+			if rabbitmq.RMQMessage == nil {
+				log.Printf("[AIHelper] RMQMessage is nil, skip publishing")
+			} else if err := rabbitmq.RMQMessage.Publish(data); err != nil {
+				log.Printf("[AIHelper] failed to publish message to MQ: %v", err)
+			}
+			return msg, nil
 		},
 		SessionID: SessionID,
 	}
@@ -68,10 +73,18 @@ func (a *AIHelper) GenerateResponse(userName string, ctx context.Context, userQu
 	//调用存储函数
 	a.AddMessage(userQuestion, userName, true, true)
 
-	a.mu.RLock()
-	//将model.Message转化成schema.Message
+	// 记忆压缩检查
+	a.mu.Lock()
+	compressor := NewCompressor(GetMaxTokens())
+	if compressor.ShouldCompress(a.messages) {
+		newMsgs, summary, err := compressor.Compress(a.messages, a.model)
+		if err == nil && summary != "" {
+			a.messages = newMsgs
+			log.Printf("[AIHelper] memory compressed, session=%s tokens saved", a.SessionID)
+		}
+	}
 	messages := utils.ConvertToSchemaMessages(a.messages)
-	a.mu.RUnlock()
+	a.mu.Unlock()
 
 	//调用模型生成回复
 	schemaMsg, err := a.model.GenerateResponse(ctx, messages)
@@ -94,9 +107,18 @@ func (a *AIHelper) StreamResponse(userName string, ctx context.Context, cb Strea
 	//调用存储函数
 	a.AddMessage(userQuestion, userName, true, true)
 
-	a.mu.RLock()
+	// 记忆压缩检查
+	a.mu.Lock()
+	compressor := NewCompressor(GetMaxTokens())
+	if compressor.ShouldCompress(a.messages) {
+		newMsgs, summary, err := compressor.Compress(a.messages, a.model)
+		if err == nil && summary != "" {
+			a.messages = newMsgs
+			log.Printf("[AIHelper] memory compressed, session=%s tokens saved", a.SessionID)
+		}
+	}
 	messages := utils.ConvertToSchemaMessages(a.messages)
-	a.mu.RUnlock()
+	a.mu.Unlock()
 
 	content, err := a.model.StreamResponse(ctx, messages, cb)
 	if err != nil {

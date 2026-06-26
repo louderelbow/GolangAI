@@ -220,22 +220,55 @@ export default {
     }
 
     const handleRegister = async () => {
+      const pw = registerForm.password
+      const cpw = registerForm.confirmPassword
+      console.log('[Register] ========== 开始注册 ==========')
+      console.log('[Register] password:', JSON.stringify(pw), 'type:', typeof pw, 'length:', pw?.length)
+      console.log('[Register] confirmPassword:', JSON.stringify(cpw), 'type:', typeof cpw, 'length:', cpw?.length)
+      console.log('[Register] 密码一致?', pw === cpw)
+
+      if (pw !== cpw) {
+        console.log('[Register] ❌ 密码不一致，阻止提交')
+        ElMessage.warning('两次输入密码不一致，请重新输入')
+        return
+      }
+      console.log('[Register] ✅ 密码一致校验通过')
+
+      // 表单验证
+      let valid = false
       try {
         await registerFormRef.value.validate()
+        valid = true
+        console.log('[Register] ✅ 表单验证通过')
+      } catch (err) {
+        console.log('[Register] ❌ 表单验证失败:', err)
+        return
+      }
+
+      if (!valid) return
+
+      // API 调用
+      try {
         loading.value = true
-        const response = await api.post('/user/register', {
+        const payload = {
           email: registerForm.email,
           captcha: registerForm.captcha,
           password: registerForm.password
-        })
+        }
+        console.log('[Register] 📤 发送注册请求 payload:', JSON.stringify(payload))
+        const response = await api.post('/user/register', payload)
+        console.log('[Register] 📥 服务器响应:', JSON.stringify(response.data))
         if (response.data.status_code === 1000) {
+          console.log('[Register] ✅ 注册成功')
           ElMessage.success('注册成功，请登录')
           router.push('/login')
         } else {
+          console.log('[Register] ❌ 服务器返回失败, status_code:', response.data.status_code, 'msg:', response.data.status_msg)
           ElMessage.error(response.data.status_msg || '注册失败')
         }
       } catch (error) {
-        console.error('Register error:', error)
+        console.error('[Register] ❌ 网络/服务器异常:', error)
+        console.error('[Register] 异常详情:', error?.response?.data || error?.message || error)
         ElMessage.error('注册失败，请重试')
       } finally {
         loading.value = false

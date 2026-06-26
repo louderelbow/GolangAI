@@ -55,6 +55,8 @@ type RagModelConfig struct {
 	RagDocDir         string `toml:"docDir"`
 	RagBaseUrl        string `toml:"baseUrl"`
 	RagDimension      int    `toml:"dimension"`
+	RagApiKey         string `toml:"apiKey"`
+	MaxContextTokens  int    `toml:"maxContextTokens"`
 }
 
 type VoiceServiceConfig struct {

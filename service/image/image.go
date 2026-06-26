@@ -8,12 +8,8 @@ import (
 )
 
 func RecognizeImage(file *multipart.FileHeader) (string, error) {
-
-	modelPath := "/root/models/mobilenetv2/mobilenetv2-7.onnx"
-	labelPath := "/root/imagenet_classes.txt"
-	inputH, inputW := 224, 224
-
-	recognizer, err := image.NewImageRecognizer(modelPath, labelPath, inputH, inputW)
+	// 创建识别器（自动读取 config.toml 中的阿里云 API 配置）
+	recognizer, err := image.NewImageRecognizer("", "", 0, 0)
 	if err != nil {
 		log.Println("NewImageRecognizer fail err is : ", err)
 		return "", err

@@ -2,12 +2,16 @@ package rag
 
 import (
 	"context"
+	"crypto/md5"
 	"deeptalk/common/redis"
 	redisPkg "deeptalk/common/redis"
 	"deeptalk/config"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	embeddingArk "github.com/cloudwego/eino-ext/components/embedding/ark"
 	redisIndexer "github.com/cloudwego/eino-ext/components/indexer/redis"
@@ -36,20 +40,25 @@ func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
 	// 用于控制整个初始化流程（超时 / 取消等），这里先用默认背景即可
 	ctx := context.Background()
 
-	// 从环境变量中读取调用向量模型所需的 API Key
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	// 从配置读取 Embedding API Key
+	conf := config.GetConfig()
+	apiKey := conf.RagModelConfig.RagApiKey
+	if apiKey == "" {
+		apiKey = os.Getenv("ALIYUN_API_KEY")
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("DEEPSEEK_API_KEY")
+	}
 
 	// 向量的维度大小（等于向量模型输出的数字个数）
 	// Redis 在创建向量索引时必须提前知道这个值
-	dimension := config.GetConfig().RagModelConfig.RagDimension
+	dimension := conf.RagModelConfig.RagDimension
 
-	// 1. 配置并创建“向量生成器”（Embedding）
-	// 可以理解为：找一个“翻译官”，
-	// 专门负责把文本翻译成 AI 能理解的“向量表示”
+	// 1. 配置并创建”向量生成器”（Embedding）
 	embedConfig := &embeddingArk.EmbeddingConfig{
-		BaseURL: config.GetConfig().RagModelConfig.RagBaseUrl, // 向量模型服务地址
-		APIKey:  apiKey,                                       // 鉴权信息
-		Model:   embeddingModel,                               // 使用哪个向量模型
+		BaseURL: conf.RagModelConfig.RagBaseUrl, // 向量模型服务地址
+		APIKey:  apiKey,                         // 鉴权信息
+		Model:   embeddingModel,                 // 使用哪个向量模型
 	}
 
 	// 创建向量生成器实例
@@ -161,7 +170,13 @@ func DeleteIndex(ctx context.Context, filename string) error {
 // NewRAGQuery 创建 RAG 查询器（用于向量检索和问答）
 func NewRAGQuery(ctx context.Context, username string) (*RAGQuery, error) {
 	cfg := config.GetConfig()
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := cfg.RagModelConfig.RagApiKey
+	if apiKey == "" {
+		apiKey = os.Getenv("ALIYUN_API_KEY")
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("DEEPSEEK_API_KEY")
+	}
 
 	// 创建 embedding 模型
 	embedConfig := &embeddingArk.EmbeddingConfig{
@@ -234,12 +249,28 @@ func NewRAGQuery(ctx context.Context, username string) (*RAGQuery, error) {
 	}, nil
 }
 
-// RetrieveDocuments 检索相关文档
+// RetrieveDocuments 检索相关文档（带 Embedding 缓存）
 func (r *RAGQuery) RetrieveDocuments(ctx context.Context, query string) ([]*schema.Document, error) {
+	// 尝试从 Redis 缓存获取
+	cacheKey := "rag_cache:" + fmt.Sprintf("%x", md5.Sum([]byte(query)))
+	if cached, err := redisPkg.Rdb.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
+		var docs []*schema.Document
+		if json.Unmarshal([]byte(cached), &docs) == nil {
+			return docs, nil
+		}
+	}
+
+	// 缓存未命中，调 Embedding 检索
 	docs, err := r.retriever.Retrieve(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve documents: %w", err)
 	}
+
+	// 写入缓存（1 小时 TTL）
+	if data, err := json.Marshal(docs); err == nil {
+		redisPkg.Rdb.Set(ctx, cacheKey, string(data), time.Hour)
+	}
+
 	return docs, nil
 }
 
@@ -266,48 +297,191 @@ func BuildRAGPrompt(query string, docs []*schema.Document) string {
 	return prompt
 }
 
-// splitDocument 将文档内容按段落切分成多个小块
+// splitDocument 智能分片：根据文件类型自动选择策略
 func splitDocument(content []byte, filePath string) []*schema.Document {
 	text := string(content)
+	ext := strings.ToLower(filepath.Ext(filePath))
+
+	switch ext {
+	case ".md", ".markdown":
+		return splitMarkdown(text, filePath)
+	default:
+		return splitPlainText(text, filePath)
+	}
+}
+
+// splitMarkdown 按 ## 标题切割 Markdown，保留父标题上下文
+func splitMarkdown(text, source string) []*schema.Document {
+	const (
+		chunkSize    = 500
+		chunkOverlap = 50
+	)
+
+	// 按 ## 标题拆分章节
+	sections := splitByHeaders(text)
 	docs := make([]*schema.Document, 0)
+	docID := 0
 
-	// 按换行符分割段落
-	paragraphs := strings.Split(text, "\n\n")
-	chunkSize := 500
-	chunkOverlap := 50
-
-	for i, paragraph := range paragraphs {
-		paragraph = strings.TrimSpace(paragraph)
-		if paragraph == "" {
-			continue
+	for _, sec := range sections {
+		content := sec.content
+		prefix := sec.title
+		if prefix != "" {
+			prefix = prefix + "\n"
 		}
 
-		// 如果段落过长，进一步切分
-		if len(paragraph) > chunkSize {
-			for j := 0; j < len(paragraph); j += chunkSize - chunkOverlap {
-				end := j + chunkSize
-				if end > len(paragraph) {
-					end = len(paragraph)
-				}
-				docs = append(docs, &schema.Document{
-					ID:      fmt.Sprintf("doc_%d_%d", i, j),
-					Content: paragraph[j:end],
-					MetaData: map[string]any{
-						"source": filePath,
-						"chunk":  fmt.Sprintf("%d-%d", j, end),
-					},
-				})
-			}
-		} else {
+		// 每个章节内部递归切片
+		chunks := recursiveSplit(prefix+content, chunkSize, chunkOverlap)
+		for _, c := range chunks {
 			docs = append(docs, &schema.Document{
-				ID:      fmt.Sprintf("doc_%d", i),
-				Content: paragraph,
+				ID:      fmt.Sprintf("doc_%d", docID),
+				Content: c,
 				MetaData: map[string]any{
-					"source": filePath,
+					"source": source,
+					"title":  sec.title,
 				},
 			})
+			docID++
 		}
 	}
-
 	return docs
+}
+
+// splitPlainText 递归文本分割：逐级尝试更小的分隔符
+func splitPlainText(text, source string) []*schema.Document {
+	const (
+		chunkSize    = 500
+		chunkOverlap = 50
+	)
+
+	chunks := recursiveSplit(text, chunkSize, chunkOverlap)
+	docs := make([]*schema.Document, 0)
+	for i, c := range chunks {
+		docs = append(docs, &schema.Document{
+			ID:      fmt.Sprintf("doc_%d", i),
+			Content: c,
+			MetaData: map[string]any{
+				"source": source,
+			},
+		})
+	}
+	return docs
+}
+
+// recursiveSplit 递归切分：从大到小尝试分隔符
+func recursiveSplit(text string, maxLen, overlap int) []string {
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		if len(runes) == 0 {
+			return nil
+		}
+		return []string{text}
+	}
+
+	// 尝试的分隔符优先级
+	separators := []string{"\n\n", "\n", "。", "，", " ", ""}
+	for _, sep := range separators {
+		if sep == "" {
+			// 最后手段：硬切
+			return splitBySize(runes, maxLen, overlap)
+		}
+		parts := strings.Split(text, sep)
+		if len(parts) > 1 {
+			result := make([]string, 0)
+			for _, part := range parts {
+				result = append(result, recursiveSplit(part, maxLen, overlap)...)
+			}
+			// 相邻块加 overlap
+			return addOverlap(result, maxLen, overlap)
+		}
+	}
+	return splitBySize(runes, maxLen, overlap)
+}
+
+// splitBySize 按 rune 硬切 + overlap
+func splitBySize(runes []rune, maxLen, overlap int) []string {
+	result := make([]string, 0)
+	step := maxLen - overlap
+	if step <= 0 {
+		step = maxLen
+	}
+	for i := 0; i < len(runes); i += step {
+		end := i + maxLen
+		if end > len(runes) {
+			end = len(runes)
+		}
+		result = append(result, string(runes[i:end]))
+		if end == len(runes) {
+			break
+		}
+	}
+	return result
+}
+
+// addOverlap 为所有相邻块添加重叠
+func addOverlap(chunks []string, maxLen, overlap int) []string {
+	if len(chunks) <= 1 {
+		return chunks
+	}
+	result := make([]string, 0, len(chunks))
+	for i, ch := range chunks {
+		runes := []rune(ch)
+		if i > 0 && len(runes) < maxLen {
+			// 从上一块的末尾取 overlap 字符加到本块开头
+			prev := []rune(chunks[i-1])
+			prevLen := len(prev)
+			if prevLen > overlap {
+				ch = string(prev[prevLen-overlap:]) + ch
+			}
+		}
+		result = append(result, ch)
+	}
+	return result
+}
+
+// section 表示 Markdown 的一个章节
+type section struct {
+	title   string
+	content string
+}
+
+// splitByHeaders 按 Markdown 标题（## 和 ###）拆分
+func splitByHeaders(text string) []section {
+	lines := strings.Split(text, "\n")
+	sections := make([]section, 0)
+	var currentTitle string
+	var currentLines []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// 检测 ## 或 ### 标题（排除 # 一级标题，留给文档级别）
+		if strings.HasPrefix(trimmed, "### ") || strings.HasPrefix(trimmed, "## ") {
+			// 保存上一节
+			if len(currentLines) > 0 {
+				sections = append(sections, section{
+					title:   currentTitle,
+					content: strings.Join(currentLines, "\n"),
+				})
+			}
+			currentTitle = trimmed
+			currentLines = make([]string, 0)
+		} else if strings.HasPrefix(trimmed, "# ") {
+			// 一级标题作为文档标题，不作为分节边界
+			if currentTitle == "" {
+				currentTitle = trimmed
+			}
+		} else {
+			currentLines = append(currentLines, line)
+		}
+	}
+	// 最后一节
+	if len(currentLines) > 0 {
+		sections = append(sections, section{
+			title:   currentTitle,
+			content: strings.Join(currentLines, "\n"),
+		})
+	}
+	if len(sections) == 0 {
+		sections = append(sections, section{content: text})
+	}
+	return sections
 }

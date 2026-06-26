@@ -4,20 +4,20 @@ host = "0.0.0.0"
 port = 9090
 
 [emailConfig]
-authcode = "your-qq-email-authcode"
-email = "your-email@qq.com"
+authcode = "utachyuuqnoycjda"
+email = "3251983485@qq.com"
 
 [redisConfig]
-host = "127.0.0.1"
+host = "redis"
 port = 6379
 password = ""
 db = 0
 
 [mysqlConfig]
-host = "127.0.0.1"
+host = "mysql"
 port = 3306
 user = "root"
-password = "your-mysql-password"
+password = "050922"
 databaseName = "deeptalk"
 charset = "utf8mb4"
 
@@ -25,13 +25,13 @@ charset = "utf8mb4"
 expire_duration = 8760
 issuer = "immortal"
 subject = "DeepTalk"
-key = "your-jwt-secret-key"
+key = "GolangAIwpl"
 
 [rabbitmqConfig]
-host = "127.0.0.1"
+host = "rabbitmq"
 port = 5672
 username = "root"
-password = "your-rabbitmq-password"
+password = "123456"
 vhost = "/"
 
 [ragModelConfig]
@@ -40,9 +40,9 @@ chatModelName = "qwen-turbo"
 docDir = "./docs"
 baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 dimension = 1024
-apiKey = "your-dashscope-api-key"
+apiKey = "sk-686d51e45428463b8970db7296aa7cd4"
 maxContextTokens = 4000
 
 [voiceServiceConfig]
-voiceServiceApiKey = "your-voice-service-api-key"
-voiceServiceSecretKey = "your-voice-service-secret-key"
+voiceServiceApiKey = "UJb2GVWwLRsnec5sFeKaj3hZ"
+voiceServiceSecretKey = "SeotgK0OtllA7VlH6hJCZRcFn1L0XyFk"

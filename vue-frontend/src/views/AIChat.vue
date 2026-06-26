@@ -51,6 +51,8 @@
             <option value="1">DeepSeek</option>
             <option value="2">阿里百炼 RAG</option>
             <option value="3">阿里百炼 MCP</option>
+            <option value="4">Ollama</option>
+            <option value="5">ReAct Agent</option>
           </select>
         </div>
         <div class="topbar-right">

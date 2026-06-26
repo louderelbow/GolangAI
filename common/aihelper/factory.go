@@ -65,6 +65,11 @@ func (f *AIModelFactory) registerCreators() {
 		}
 		return NewOllamaModel(ctx, baseURL, modelName)
 	}
+
+		// ReAct Agent
+		f.creators["5"] = func(ctx context.Context, config map[string]interface{}) (AIModel, error) {
+			return NewReActModel(ctx)
+		}
 	// 阿里百炼 mcp 模型
 
 }

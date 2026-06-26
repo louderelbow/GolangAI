@@ -9,11 +9,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/cloudwego/eino-ext/components/model/ollama"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -162,8 +165,17 @@ type AliRAGModel struct {
 }
 
 func NewAliRAGModel(ctx context.Context, username string) (*AliRAGModel, error) {
-	key := os.Getenv("OPENAI_API_KEY")
 	conf := config.GetConfig()
+	key := conf.RagModelConfig.RagApiKey
+	if key == "" {
+		key = os.Getenv("ALIYUN_API_KEY")
+	}
+	if key == "" {
+		key = os.Getenv("DEEPSEEK_API_KEY")
+	}
+	if key == "" {
+		key = os.Getenv("OPENAI_API_KEY")
+	}
 	modelName := conf.RagModelConfig.RagChatModelName
 	baseURL := conf.RagModelConfig.RagBaseUrl
 
@@ -182,49 +194,68 @@ func NewAliRAGModel(ctx context.Context, username string) (*AliRAGModel, error) 
 }
 
 func (o *AliRAGModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
-	// 1. 创建 RAG 查询器
-	ragQuery, err := rag.NewRAGQuery(ctx, o.username)
-	if err != nil {
-		log.Printf("Failed to create RAG query (user may not have uploaded file): %v", err)
-		// 如果用户没有上传文件，直接使用原始问题
-		resp, err := o.llm.Generate(ctx, messages)
-		if err != nil {
-			return nil, fmt.Errorf("ali rag generate failed: %v", err)
-		}
-		return resp, nil
-	}
-
-	// 2. 获取用户最后一条消息作为查询
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("no messages provided")
 	}
 	lastMessage := messages[len(messages)-1]
 	query := lastMessage.Content
 
-	// 3. 检索相关文档
+	// 0. 意图分类：总结全文 / 具体问题 / 闲聊
+	intent := o.classifyIntent(query)
+
+	// --- 总结全文 ---
+	if intent == intentSummary {
+		fullText, err := o.loadFullDocument()
+		if err != nil {
+			log.Printf("[RAG] loadFullDocument failed: %v, fallback to normal", err)
+		} else {
+			log.Printf("[RAG] summary intent detected, full doc len=%d", len([]rune(fullText)))
+			prompt := fmt.Sprintf("请总结以下文档的全部内容，涵盖主要主题和关键信息：\n\n%s", fullText)
+			summaryMessages := make([]*schema.Message, len(messages))
+			copy(summaryMessages, messages)
+			summaryMessages[len(summaryMessages)-1] = &schema.Message{Role: schema.User, Content: prompt}
+			resp, err := o.llm.Generate(ctx, summaryMessages)
+			if err != nil {
+				return nil, fmt.Errorf("rag summary failed: %v", err)
+			}
+			return resp, nil
+		}
+	}
+
+	// --- 闲聊 → 跳过 RAG ---
+	if intent == intentChat {
+		log.Printf("[RAG] chat intent, skip RAG")
+		return o.llm.Generate(ctx, messages)
+	}
+
+	// --- 正常 RAG 管线 ---
+	ragQuery, err := rag.NewRAGQuery(ctx, o.username)
+	if err != nil {
+		log.Printf("Failed to create RAG query: %v, fallback to normal chat", err)
+		return o.llm.Generate(ctx, messages)
+	}
+
+	keywords := o.extractKeywords(ctx, query)
+	if len(keywords) > 0 {
+		log.Printf("[RAG] extracted keywords: %v", keywords)
+		query = query + " " + strings.Join(keywords, " ")
+	}
+
 	docs, err := ragQuery.RetrieveDocuments(ctx, query)
 	if err != nil {
 		log.Printf("Failed to retrieve documents: %v", err)
-		// 检索失败，使用原始问题
-		resp, err := o.llm.Generate(ctx, messages)
-		if err != nil {
-			return nil, fmt.Errorf("ali rag generate failed: %v", err)
-		}
-		return resp, nil
+		return o.llm.Generate(ctx, messages)
 	}
 
-	// 4. 构建包含检索结果的提示词
-	ragPrompt := rag.BuildRAGPrompt(query, docs)
+	// Rerank：相似度过滤
+	docs = o.filterByRelevance(docs)
+	log.Printf("[RAG] after rerank: %d docs retained", len(docs))
 
-	// 5. 替换最后一条消息为 RAG 提示词
+	ragPrompt := rag.BuildRAGPrompt(query, docs)
 	ragMessages := make([]*schema.Message, len(messages))
 	copy(ragMessages, messages)
-	ragMessages[len(ragMessages)-1] = &schema.Message{
-		Role:    schema.User,
-		Content: ragPrompt,
-	}
+	ragMessages[len(ragMessages)-1] = &schema.Message{Role: schema.User, Content: ragPrompt}
 
-	// 6. 调用 LLM 生成回答
 	resp, err := o.llm.Generate(ctx, ragMessages)
 	if err != nil {
 		return nil, fmt.Errorf("ali rag generate failed: %v", err)
@@ -233,63 +264,80 @@ func (o *AliRAGModel) GenerateResponse(ctx context.Context, messages []*schema.M
 }
 
 func (o *AliRAGModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
-	// 1. 创建 RAG 查询器
-	ragQuery, err := rag.NewRAGQuery(ctx, o.username)
-	if err != nil {
-		log.Printf("Failed to create RAG query (user may not have uploaded file): %v", err)
-		// 如果用户没有上传文件，直接使用原始问题
-		return o.streamWithoutRAG(ctx, messages, cb)
-	}
-
-	// 2. 获取用户最后一条消息作为查询
 	if len(messages) == 0 {
 		return "", fmt.Errorf("no messages provided")
 	}
 	lastMessage := messages[len(messages)-1]
 	query := lastMessage.Content
+	intent := o.classifyIntent(query)
 
-	// 3. 检索相关文档
-	docs, err := ragQuery.RetrieveDocuments(ctx, query)
-	if err != nil {
-		log.Printf("Failed to retrieve documents: %v", err)
-		// 检索失败，使用原始问题
+	// 总结全文
+	if intent == intentSummary {
+		fullText, err := o.loadFullDocument()
+		if err != nil {
+			log.Printf("[RAG-Stream] loadFullDocument failed: %v, fallback", err)
+		} else {
+			log.Printf("[RAG-Stream] summary intent, full doc len=%d", len([]rune(fullText)))
+			prompt := fmt.Sprintf("请总结以下文档的全部内容，涵盖主要主题和关键信息：\n\n%s", fullText)
+			streamMessages := make([]*schema.Message, len(messages))
+			copy(streamMessages, messages)
+			streamMessages[len(streamMessages)-1] = &schema.Message{Role: schema.User, Content: prompt}
+			return o.streamWithoutRAG(ctx, streamMessages, cb)
+		}
+	}
+
+	// 闲聊 → 跳过 RAG
+	if intent == intentChat {
+		log.Printf("[RAG-Stream] chat intent, skip RAG")
 		return o.streamWithoutRAG(ctx, messages, cb)
 	}
 
-	// 4. 构建包含检索结果的提示词
-	ragPrompt := rag.BuildRAGPrompt(query, docs)
+	// 正常 RAG
+	ragQuery, err := rag.NewRAGQuery(ctx, o.username)
+	if err != nil {
+		log.Printf("Failed to create RAG query: %v", err)
+		return o.streamWithoutRAG(ctx, messages, cb)
+	}
 
-	// 5. 替换最后一条消息为 RAG 提示词
+	keywords := o.extractKeywords(ctx, query)
+	if len(keywords) > 0 {
+		log.Printf("[RAG-Stream] extracted keywords: %v", keywords)
+		query = query + " " + strings.Join(keywords, " ")
+	}
+
+	docs, err := ragQuery.RetrieveDocuments(ctx, query)
+	if err != nil {
+		log.Printf("Failed to retrieve documents: %v", err)
+		return o.streamWithoutRAG(ctx, messages, cb)
+	}
+
+	docs = o.filterByRelevance(docs)
+	log.Printf("[RAG-Stream] after rerank: %d docs", len(docs))
+
+	ragPrompt := rag.BuildRAGPrompt(query, docs)
 	ragMessages := make([]*schema.Message, len(messages))
 	copy(ragMessages, messages)
-	ragMessages[len(ragMessages)-1] = &schema.Message{
-		Role:    schema.User,
-		Content: ragPrompt,
-	}
+	ragMessages[len(ragMessages)-1] = &schema.Message{Role: schema.User, Content: ragPrompt}
 
-	// 6. 流式调用 LLM
 	stream, err := o.llm.Stream(ctx, ragMessages)
 	if err != nil {
-		return "", fmt.Errorf("ali rag stream failed: %v", err)
+		return "", fmt.Errorf("rag stream failed: %v", err)
 	}
 	defer stream.Close()
-
 	var fullResp strings.Builder
-
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("ali rag stream recv failed: %v", err)
+			return fullResp.String(), err
 		}
 		if len(msg.Content) > 0 {
 			fullResp.WriteString(msg.Content)
 			cb(msg.Content)
 		}
 	}
-
 	return fullResp.String(), nil
 }
 
@@ -322,6 +370,105 @@ func (o *AliRAGModel) streamWithoutRAG(ctx context.Context, messages []*schema.M
 
 func (o *AliRAGModel) GetModelType() string { return "2" }
 
+// extractKeywords 用 LLM 从用户问题中提取关键词
+func (o *AliRAGModel) extractKeywords(ctx context.Context, query string) []string {
+	// 只对较长问题做关键词提取，短问题自带了关键词
+	if len([]rune(query)) < 10 {
+		return nil
+	}
+	prompt := []*schema.Message{
+		{Role: schema.System, Content: "你是一个关键词提取助手。从用户问题中提取3-5个最重要的关键词，用逗号分隔。只返回关键词，不要其他内容。\n\n示例：\n用户：怎么申请退货退款？\n关键词：退货,退款,申请流程"},
+		{Role: schema.User, Content: query},
+	}
+	resp, err := o.llm.Generate(ctx, prompt)
+	if err != nil {
+		return nil
+	}
+	// 解析逗号分隔的关键词
+	parts := strings.Split(resp.Content, ",")
+	keywords := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			keywords = append(keywords, p)
+		}
+	}
+	return keywords
+}
+
+// intentType 表示用户问题的意图类型
+type intentType int
+
+const (
+	intentSummary intentType = iota // 总结全文
+	intentQuestion                  // 具体问题 → RAG
+	intentChat                      // 闲聊 → 普通对话
+)
+
+// classifyIntent 用关键词匹配判断用户意图
+func (o *AliRAGModel) classifyIntent(query string) intentType {
+	q := strings.ToLower(query)
+	summaryWords := []string{"总结", "概括", "摘要", "全文", "全部内容", "整篇文档", "整体内容", "大致内容"}
+	for _, w := range summaryWords {
+		if strings.Contains(q, w) {
+			return intentSummary
+		}
+	}
+	// 太短的问题或者纯闲聊 → 不触发 RAG
+	chatWords := []string{"你好", "谢谢", "再见", "怎么样", "你是谁", "能做什么", "hello", "hi", "thanks"}
+	for _, w := range chatWords {
+		if strings.Contains(q, w) && len([]rune(q)) < 15 {
+			return intentChat
+		}
+	}
+	return intentQuestion
+}
+
+// loadFullDocument 读取用户上传的文档全文
+func (o *AliRAGModel) loadFullDocument() (string, error) {
+	userDir := fmt.Sprintf("uploads/%s", o.username)
+	files, err := os.ReadDir(userDir)
+	if err != nil || len(files) == 0 {
+		return "", fmt.Errorf("no file found for user %s", o.username)
+	}
+	var filename string
+	for _, f := range files {
+		if !f.IsDir() {
+			filename = f.Name()
+			break
+		}
+	}
+	if filename == "" {
+		return "", fmt.Errorf("no valid file")
+	}
+	data, err := os.ReadFile(filepath.Join(userDir, filename))
+	if err != nil {
+		return "", err
+	}
+	text := string(data)
+	if len([]rune(text)) > 8000 {
+		text = string([]rune(text)[:8000])
+	}
+	return text, nil
+}
+
+// filterByRelevance 按相似度阈值过滤检索结果
+func (o *AliRAGModel) filterByRelevance(docs []*schema.Document) []*schema.Document {
+	const maxDistance = 0.5
+	filtered := make([]*schema.Document, 0, len(docs))
+	for _, doc := range docs {
+		if dist, ok := doc.MetaData["distance"].(float64); ok && dist < maxDistance {
+			filtered = append(filtered, doc)
+		} else if doc.MetaData["distance"] == nil {
+			filtered = append(filtered, doc)
+		}
+	}
+	if len(filtered) == 0 && len(docs) > 0 {
+		return docs[:1]
+	}
+	return filtered
+}
+
 // =================== MCP 实现 ===================
 
 // MCPModel MCP模型实现，集成MCP服务
@@ -334,8 +481,17 @@ type MCPModel struct {
 
 // NewMCPModel 创建MCP模型实例
 func NewMCPModel(ctx context.Context, username string) (*MCPModel, error) {
-	key := os.Getenv("OPENAI_API_KEY")
 	conf := config.GetConfig()
+	key := conf.RagModelConfig.RagApiKey
+	if key == "" {
+		key = os.Getenv("ALIYUN_API_KEY")
+	}
+	if key == "" {
+		key = os.Getenv("DEEPSEEK_API_KEY")
+	}
+	if key == "" {
+		key = os.Getenv("OPENAI_API_KEY")
+	}
 	modelName := conf.RagModelConfig.RagChatModelName
 	baseURL := conf.RagModelConfig.RagBaseUrl
 
@@ -429,14 +585,20 @@ func (m *MCPModel) GenerateResponse(ctx context.Context, messages []*schema.Mess
 	mcpClient, err := m.getMCPClient(ctx)
 	if err != nil {
 		log.Printf("MCP client error: %v", err)
-		return firstResp, nil
+		return &schema.Message{
+			Role:    schema.Assistant,
+			Content: "抱歉，MCP服务未启动，无法调用工具获取数据。请先启动MCP服务。",
+		}, nil
 	}
 
 	// 调用MCP工具
 	toolResult, err := m.callMCPTool(ctx, mcpClient, toolCall.ToolName, toolCall.Args)
 	if err != nil {
 		log.Printf("MCP tool call failed: %v", err)
-		return firstResp, nil
+		return &schema.Message{
+			Role:    schema.Assistant,
+			Content: fmt.Sprintf("抱歉，调用MCP工具 %s 失败：%v", toolCall.ToolName, err),
+		}, nil
 	}
 
 	// 第二次调用AI：将工具结果告诉AI
@@ -500,14 +662,18 @@ func (m *MCPModel) StreamResponse(ctx context.Context, messages []*schema.Messag
 	mcpClient, err := m.getMCPClient(ctx)
 	if err != nil {
 		log.Printf("MCP client error: %v", err)
-		return aiResult, nil
+		fallbackMsg := "抱歉，MCP服务未启动，无法调用工具获取数据。请先启动MCP服务。"
+		cb(fallbackMsg)
+		return fallbackMsg, nil
 	}
 
 	// 调用MCP工具
 	toolResult, err := m.callMCPTool(ctx, mcpClient, toolCall.ToolName, toolCall.Args)
 	if err != nil {
 		log.Printf("MCP tool call failed: %v", err)
-		return aiResult, nil
+		fallbackMsg := fmt.Sprintf("抱歉，调用MCP工具 %s 失败：%v", toolCall.ToolName, err)
+		cb(fallbackMsg)
+		return fallbackMsg, nil
 	}
 
 	// 第二次调用AI：将工具结果告诉AI，使用流式接口
@@ -663,3 +829,74 @@ func (m *MCPModel) Close() {
 		m.mcpClient.Close()
 	}
 }
+
+// =================== ReAct Agent 实现（类型 "5"） ===================
+
+type ReActModel struct {
+	agent  *react.Agent
+	llm    model.ToolCallingChatModel
+}
+
+func NewReActModel(ctx context.Context) (*ReActModel, error) {
+	key := os.Getenv("DEEPSEEK_API_KEY")
+	if key == "" {
+		key = os.Getenv("OPENAI_API_KEY")
+	}
+
+	llm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+		BaseURL: "https://api.deepseek.com",
+		Model:   "deepseek-chat",
+		APIKey:  key,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create react llm failed: %v", err)
+	}
+
+	tools := RegisterAllTools("http://localhost:8081/mcp")
+	agent, err := react.NewAgent(ctx, &react.AgentConfig{
+		ToolCallingModel: llm,
+		ToolsConfig: compose.ToolsNodeConfig{
+			Tools: tools,
+		},
+		MaxStep: 5,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create react agent failed: %v", err)
+	}
+
+	return &ReActModel{agent: agent, llm: llm}, nil
+}
+
+func (r *ReActModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
+	resp, err := r.agent.Generate(ctx, messages)
+	if err != nil {
+		return nil, fmt.Errorf("react generate failed: %v", err)
+	}
+	return resp, nil
+}
+
+func (r *ReActModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
+	stream, err := r.agent.Stream(ctx, messages)
+	if err != nil {
+		return "", fmt.Errorf("react stream failed: %v", err)
+	}
+	defer stream.Close()
+
+	var fullResp strings.Builder
+	for {
+		msg, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fullResp.String(), fmt.Errorf("react stream recv failed: %v", err)
+		}
+		if len(msg.Content) > 0 {
+			fullResp.WriteString(msg.Content)
+			cb(msg.Content)
+		}
+	}
+	return fullResp.String(), nil
+}
+
+func (r *ReActModel) GetModelType() string { return "5" }

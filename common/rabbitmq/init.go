@@ -1,5 +1,7 @@
 package rabbitmq
 
+import "log"
+
 var (
 
 	RMQMessage *RabbitMQ
@@ -11,11 +13,23 @@ func InitRabbitMQ() {
 	// 不同队列共用一个连接，可以保持不同队列消费消息的顺序
 
 	RMQMessage = NewWorkRabbitMQ("Message")
-	go RMQMessage.Consume(MQMessage)
-
+	if RMQMessage == nil {
+		log.Println("[RabbitMQ] init skipped: MQ unavailable, server will run without message queue")
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[RabbitMQ Consumer] panic recovered: %v", r)
+			}
+		}()
+		RMQMessage.Consume(MQMessage)
+	}()
 }
 
 // DestroyRabbitMQ 销毁RabbitMQ
 func DestroyRabbitMQ() {
-	RMQMessage.Destroy()
+	if RMQMessage != nil {
+		RMQMessage.Destroy()
+	}
 }

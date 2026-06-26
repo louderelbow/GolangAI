@@ -1,0 +1,83 @@
+# DeepTalk 基础设施 + 后端
+# 用法：
+#   只启基础设施（GoLand 跑后端）：docker-compose up -d mysql redis rabbitmq
+#   全部启动：                 docker-compose up -d
+#   查看日志：                 docker-compose logs -f backend
+#   管理界面：
+#     RabbitMQ → http://localhost:15672 (root/123456)
+#     Redis    → http://localhost:8001
+
+version: "3.8"
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: deeptalk-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: "050922"
+      MYSQL_DATABASE: deeptalk
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./gopherai.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis/redis-stack:latest
+    container_name: deeptalk-redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: deeptalk-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: root
+      RABBITMQ_DEFAULT_PASS: "123456"
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deeptalk-backend
+    ports:
+      - "9090:9090"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ALIYUN_API_KEY=${ALIYUN_API_KEY}
+    command: ["/app/deeptalk"]
+
+volumes:
+  mysql_data:
+  redis_data:
+  rabbitmq_data:
