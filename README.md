@@ -1,152 +1,136 @@
-# DeepTalk (GopherAI-v2)
+# DeepTalk
 
-一个基于 Go + Vue 3 构建的 AI 对话平台，集成了聊天、图片识别、文件 RAG 检索、语音合成等功能。
+一个基于 Go + Vue 3 构建的 AI 对话平台，采用工厂+策略模式统一调度 5 类大模型，集成 RAG 知识库检索、ReAct Agent 自主工具调用、MCP 协议、限流熔断等功能。
 
 ## 功能特性
 
-- **AI 智能对话**：支持文本对话和流式输出（SSE），基于 CloudWeGo Eino 框架，兼容 Ollama / OpenAI 等模型
-- **图片识别**：基于 ONNX Runtime 的图片内容识别
-- **文件 RAG 检索**：上传文件后自动构建向量索引，支持知识库问答（基于 Redis + Embedding）
-- **语音合成（TTS）**：集成百度语音合成 API
-- **MCP 协议**：支持 Model Context Protocol，可扩展工具调用
-- **用户系统**：注册 / 登录，JWT 鉴权
-- **消息持久化**：MySQL 存储用户、会话、消息数据
-- **实时消息**：RabbitMQ 消息队列支持
+| 模块 | 功能 |
+|------|------|
+| 🤖 多模型对话 | 工厂+策略模式统一调度 **DeepSeek / RAG / MCP / Ollama / ReAct Agent** 五类模型，新增模型一行注册 |
+| 📚 RAG 知识库 | 智能 Markdown 分片 → 火山方舟 Embedding → Redis Stack 向量索引 → LLM 关键词增强检索 → Prompt 生成，全链路降级 |
+| 🧠 ReAct Agent | Eino 原生 Agent 循环，4 个 InferTool（calculator/datetime/word_count/get_weather），MaxStep=5 自主推理 |
+| 🔌 MCP 协议 | Server + Client 完整实现，StreamableHTTP 传输，支持跨模型工具调用 |
+| 🛡️ 限流熔断 | Redis Token Bucket（Lua 原子性）+ 本地 sync.Map 降级，超限返回 429 |
+| 💾 记忆压缩 | Token 动态估算，超 4000 token 触发 LLM 摘要压缩，保留最近 3 轮原始对话 |
+| 🎤 语音合成 | 百度 TTS API，sync.Map 缓存音频，前端轮询播放 |
+| 🖼️ 图片识别 | 阿里云 DashScope 多模态 API（qwen-vl-plus），中文描述图片内容 |
+| 📝 消息持久化 | RabbitMQ 异步落库（队列持久化 + 手动 Ack），消息不丢 |
+| 🔐 用户系统 | 注册/登录，bcrypt 密码哈希，JWT 鉴权中间件 |
+| 🌊 SSE 流式 | 服务端 text/event-stream，前端 fetch ReadableStream 实时渲染 |
 
 ## 技术栈
 
 | 类别 | 技术 |
 |------|------|
-| 后端框架 | Go 1.25 + Gin |
+| 后端框架 | Go + Gin |
 | 前端框架 | Vue 3 + Element Plus + Axios |
 | 数据库 | MySQL 8.x (GORM) |
-| 缓存 | Redis 7.x (go-redis) |
-| 消息队列 | RabbitMQ (AMQP) |
-| AI 框架 | CloudWeGo Eino (Ollama / OpenAI 兼容) |
-| RAG | Redis Vector + Eino Embedding + Retriever |
-| 图片识别 | ONNX Runtime Go |
+| 缓存/向量 | Redis Stack (go-redis v9) |
+| 消息队列 | RabbitMQ (AMQP, streadway/amqp) |
+| AI 框架 | CloudWeGo Eino (ChatModel / Embedding / Agent / Retriever) |
+| RAG | 自建分片 + Eino Embedding + Redis FT.SEARCH |
+| 图片识别 | 阿里云 DashScope qwen-vl-plus |
 | 语音合成 | 百度语音 API |
-| 认证 | JWT (golang-jwt) |
-| MCP | mcp-go |
+| 认证 | JWT (golang-jwt/jwt v4) |
+| 限流 | Redis Lua Token Bucket + sync.Map 降级 |
+| MCP | mcp-go (StreamableHTTP) |
 
 ## 项目结构
 
 ```
-GopherAI-v2/
-├── main.go                  # 入口文件
-├── config/                  # 配置模块
-│   ├── config.go
-│   └── config.toml.example  # 配置模板
-├── router/                  # 路由定义
-│   ├── router.go            # 路由入口 + 中间件
-│   ├── AI.go                # AI 聊天路由
-│   ├── File.go              # 文件上传路由
-│   ├── Image.go             # 图片识别路由
-│   └── user.go              # 用户路由
-├── controller/              # 控制器层
-│   ├── session/session.go   # 会话管理
-│   ├── file/file.go         # 文件上传
-│   ├── image/image.go       # 图片识别
-│   ├── tts/tts.go           # 语音合成
-│   ├── user/user.go         # 用户注册/登录
-│   └── common.go            # 通用响应
-├── service/                 # 业务逻辑层
-│   ├── session/session.go   # 会话 + AI 对话
-│   ├── file/file.go         # 文件存储 + RAG 索引
-│   ├── image/image.go       # 图片识别服务
-│   └── user/user.go         # 用户服务
-├── dao/                     # 数据访问层
+DeepTalk/
+├── main.go                        # 入口：初始化 DB/Redis/MQ → 加载历史 → 启动 HTTP
+├── config/
+│   ├── config.go                  # TOML 单例配置（启动时一次性加载，零 IO）
+│   ├── config.toml.example        # 配置模板（真实 config.toml 由 .gitignore 排除）
+│   └── config.toml.docker         # Docker 部署用配置
+├── router/
+│   ├── router.go                  # 路由入口 + JWT/RequestID/RateLimit 中间件
+│   ├── AI.go                      # 聊天路由（8 个）
+│   ├── File.go                    # 文件上传路由
+│   ├── Image.go                   # 图片识别路由
+│   └── user.go                    # 用户路由（3 个）
+├── controller/                    # 控制器层（参数绑定 + 响应）
+│   ├── session/session.go
+│   ├── file/file.go
+│   ├── image/image.go
+│   ├── tts/tts.go
+│   ├── user/user.go
+│   └── common.go
+├── service/                       # 业务逻辑层
+│   ├── session/session.go
+│   ├── file/file.go
+│   ├── image/image.go
+│   └── user/user.go
+├── dao/                           # 数据访问层
 │   ├── message/message.go
 │   ├── session/session.go
 │   └── user/user.go
-├── model/                   # 数据模型
-├── common/                  # 通用组件
-│   ├── aihelper/            # AI 助手管理器（Eino Agent）
-│   ├── tts/                 # TTS 服务
-│   ├── rag/                 # RAG 检索
-│   ├── image/               # 图片识别
-│   ├── mysql/               # MySQL 初始化
-│   ├── redis/               # Redis 初始化
-│   ├── rabbitmq/            # RabbitMQ 初始化
-│   ├── email/               # 邮件服务
-│   ├── code/                # 验证码
-│   └── mcp/                 # MCP 客户端/服务端
-├── middleware/               # 中间件
-│   └── jwt/                 # JWT 认证
-├── utils/                   # 工具函数
-├── vue-frontend/            # Vue 3 前端
-│   └── src/
-│       ├── views/           # 页面组件
-│       ├── router/          # 前端路由
-│       └── utils/           # Axios 封装
-├── gopherai.sql             # 数据库初始化脚本
-├── go.mod
-└── go.sum
+├── model/                         # GORM 数据模型
+├── common/                        # 通用组件
+│   ├── aihelper/                  # AI 核心
+│   │   ├── factory.go             #   工厂注册 5 模型
+│   │   ├── manager.go             #   嵌套 map + RWMutex 管理
+│   │   ├── aihelper.go            #   消息历史 + MQ 异步落库
+│   │   ├── model.go               #   5 个模型实现（OpenAI/RAG/MCP/Ollama/ReAct）
+│   │   ├── compressor.go          #   记忆压缩器
+│   │   └── tools.go               #   ReAct Agent 4 个 InferTool
+│   ├── rag/                       # RAG 检索（分片/Embedding/索引/检索）
+│   ├── mcp/                       # MCP Server + Client
+│   ├── tts/                       # 百度 TTS
+│   ├── image/                     # 阿里云 DashScope 多模态识别
+│   ├── mysql/                     # MySQL 连接池
+│   ├── redis/                     # Redis 连接
+│   ├── rabbitmq/                  # RabbitMQ（Work Queue + 手动 Ack）
+│   ├── email/                     # 邮件验证码
+│   ├── logger/                    # slog 封装（requestId 链路追踪）
+│   └── code/                      # 统一错误码
+├── middleware/
+│   ├── jwt/jwt.go                 # JWT 认证中间件
+│   ├── requestid.go               # RequestID 链路追踪中间件
+│   └── ratelimit.go              # Token Bucket 限流中间件
+├── utils/                         # 工具函数（JWT/密码/随机数）
+├── vue-frontend/                  # Vue 3 前端
+└── gopherai.sql                   # 数据库初始化
 ```
-
-## 环境要求
-
-- **Go** >= 1.25
-- **Node.js** >= 16（前端）
-- **MySQL** >= 8.0
-- **Redis** >= 7.0
-- **RabbitMQ** >= 3.x
-- **ONNX Runtime**（图片识别需要）
 
 ## 快速开始
 
-### 1. 克隆项目
+### 环境要求
 
-```bash
-git clone <your-repo-url>
-cd GopherAI-v2
-```
+- Go >= 1.21
+- Node.js >= 16
+- MySQL >= 8.0
+- Redis Stack >= 7.x（向量索引需要）
+- RabbitMQ >= 3.x（可选，不启动时自动降级）
 
-### 2. 配置文件
+### 1. 配置文件
 
 ```bash
 cp config/config.toml.example config/config.toml
+# 编辑 config.toml 填入你的 MySQL/Redis/RabbitMQ/API Key 配置
 ```
 
-编辑 `config/config.toml`，填入你的配置信息：
-
-- MySQL 连接信息
-- Redis 连接信息
-- RabbitMQ 连接信息
-- AI 模型配置（Ollama / OpenAI 兼容接口）
-- 百度语音 API Key（TTS 需要）
-- JWT 密钥
-- 邮箱配置（验证码发送）
-
-### 3. 初始化数据库
+### 2. 初始化数据库
 
 ```bash
 mysql -u root -p < gopherai.sql
 ```
 
-### 4. 启动后端
+### 3. 启动后端
 
 ```bash
 go run main.go
+# 服务运行在 http://localhost:9090
 ```
 
-服务默认运行在 `http://localhost:9090`。
-
-### 5. 启动前端（开发模式）
+### 4. 启动前端
 
 ```bash
 cd vue-frontend
 npm install
 npm run serve
-```
-
-前端运行在 `http://localhost:8080`，已配置代理将 `/api` 请求转发到后端 `9090` 端口。
-
-### 6. 构建前端（生产模式）
-
-```bash
-cd vue-frontend
-npm run build
+# 前端运行在 http://localhost:8080
 ```
 
 ## API 接口
@@ -157,48 +141,45 @@ npm run build
 |------|------|------|
 | POST | `/api/v1/user/register` | 用户注册 |
 | POST | `/api/v1/user/login` | 用户登录 |
-| POST | `/api/v1/user/captcha` | 获取验证码 |
+| POST | `/api/v1/user/captcha` | 获取邮箱验证码 |
 
 ### AI 聊天模块（需要 JWT）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/AI/chat/sessions` | 获取用户会话列表 |
-| POST | `/api/v1/AI/chat/send-new-session` | 创建新会话并发送消息 |
-| POST | `/api/v1/AI/chat/send` | 发送消息到已有会话 |
-| POST | `/api/v1/AI/chat/history` | 获取会话历史消息 |
-| POST | `/api/v1/AI/chat/send-stream-new-session` | 创建新会话并流式发送 |
-| POST | `/api/v1/AI/chat/send-stream` | 流式发送消息 |
+| POST | `/api/v1/AI/chat/send-new-session` | 创建新会话并发送 |
+| POST | `/api/v1/AI/chat/send` | 发送消息（body 含 modelType: 1-5） |
+| POST | `/api/v1/AI/chat/history` | 获取会话历史 |
+| POST | `/api/v1/AI/chat/send-stream-new-session` | 流式创建新会话 |
+| POST | `/api/v1/AI/chat/send-stream` | 流式发送 |
 | POST | `/api/v1/AI/chat/tts` | 创建 TTS 任务 |
-| GET | `/api/v1/AI/chat/tts/query` | 查询 TTS 任务 |
+| GET | `/api/v1/AI/chat/tts/query` | 查询 TTS 结果 |
 
-### 图片识别（需要 JWT）
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/image/recognize` | 图片识别 |
-
-### 文件上传（需要 JWT）
+### 其他（需要 JWT）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/image/recognize` | 图片识别（表单上传） |
 | POST | `/api/v1/file/upload` | 上传文件并构建 RAG 索引 |
 
-## MCP 模式
+### 模型类型说明
 
-项目内置 MCP（Model Context Protocol）支持，可单独启动 MCP 服务器：
+| modelType | 模型 | 说明 |
+|-----------|------|------|
+| 1 | DeepSeek | OpenAI 兼容协议，默认聊天 |
+| 2 | 阿里百炼 RAG | 知识库检索增强生成 |
+| 3 | 阿里百炼 MCP | MCP 协议工具调用 |
+| 4 | Ollama | 本地离线模型 |
+| 5 | ReAct Agent | Eino 原生 Agent + 4 工具 |
 
-```bash
-cd common/mcp
-go run main.go --mode server --http-addr :8081
-```
+## 限流说明
 
-## 前端页面
+所有 `/AI/chat/*` 接口受 Token Bucket 限流保护：
+- 每用户容量 10 次突发，每秒补充 2 次
+- 超限返回 HTTP 429 `{"status_code":4002,"status_msg":"请求过于频繁，请稍后再试"}`
+- Redis 不可用时自动降级本地 sync.Map 限流
 
-| 路径 | 页面 |
-|------|------|
-| `/login` | 登录页 |
-| `/register` | 注册页 |
-| `/menu` | 功能菜单 |
-| `/ai-chat` | AI 对话 |
-| `/image-recognition` | 图片识别 |
+## License
+
+MIT
