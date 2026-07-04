@@ -852,7 +852,7 @@ func NewReActModel(ctx context.Context) (*ReActModel, error) {
 		return nil, fmt.Errorf("create react llm failed: %v", err)
 	}
 
-	tools := RegisterAllTools("http://localhost:8081/mcp")
+	tools := RegisterAllTools()
 	agent, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: llm,
 		ToolsConfig: compose.ToolsNodeConfig{

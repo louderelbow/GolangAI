@@ -215,7 +215,7 @@ type weatherOutput struct {
 	Report string `json:"report"`
 }
 
-func NewWeatherTool(mcpServerURL string) tool.InvokableTool {
+func NewWeatherTool() tool.InvokableTool {
 	t, _ := toolutils.InferTool[weatherInput, weatherOutput](
 		"get_weather",
 		"查询指定城市的天气信息",
@@ -256,14 +256,11 @@ func queryWeatherDirect(city string) (string, error) {
 
 // ====================== 工具集合注册 ======================
 
-func RegisterAllTools(mcpURL string) []tool.BaseTool {
-	if mcpURL == "" {
-		mcpURL = "http://localhost:8081/mcp"
-	}
+func RegisterAllTools() []tool.BaseTool {
 	return []tool.BaseTool{
 		NewCalculatorTool(),
 		NewDateTimeTool(),
 		NewWordCountTool(),
-		NewWeatherTool(mcpURL),
+		NewWeatherTool(),
 	}
 }
