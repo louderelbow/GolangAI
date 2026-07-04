@@ -12,7 +12,7 @@
 | 🔌 MCP 协议 | Server + Client 完整实现，StreamableHTTP 传输，支持跨模型工具调用 |
 | 🛡️ 限流熔断 | Redis Token Bucket（Lua 原子性）+ 本地 sync.Map 降级，超限返回 429 |
 | 💾 记忆压缩 | Token 动态估算，超 4000 token 触发 LLM 摘要压缩，保留最近 3 轮原始对话 |
-| 🎤 语音合成 | 百度 TTS API，sync.Map 缓存音频，前端轮询播放 |
+| 🎤 语音合成 | 百度 TTS API，MD5 文本缓存，单次请求直接返回音频流 |
 | 🖼️ 图片识别 | 阿里云 DashScope 多模态 API（qwen-vl-plus），中文描述图片内容 |
 | 📝 消息持久化 | RabbitMQ 异步落库（队列持久化 + 手动 Ack），消息不丢 |
 | 🔐 用户系统 | 注册/登录，bcrypt 密码哈希，JWT 鉴权中间件 |
@@ -153,8 +153,7 @@ npm run serve
 | POST | `/api/v1/AI/chat/history` | 获取会话历史 |
 | POST | `/api/v1/AI/chat/send-stream-new-session` | 流式创建新会话 |
 | POST | `/api/v1/AI/chat/send-stream` | 流式发送 |
-| POST | `/api/v1/AI/chat/tts` | 创建 TTS 任务 |
-| GET | `/api/v1/AI/chat/tts/query` | 查询 TTS 结果 |
+| POST | `/api/v1/AI/chat/tts/play` | 语音合成（文本 MD5 缓存，返回 audio/mp3 流） |
 
 ### 其他（需要 JWT）
 
