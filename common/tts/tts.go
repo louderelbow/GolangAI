@@ -3,8 +3,8 @@ package tts
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"deeptalk/config"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,12 +24,27 @@ func NewTTSService() *TTSService {
 	return &TTSService{}
 }
 
-// ------------------ Create TTS ------------------
+// GetOrCreateTTS 根据文本获取语音，相同文本走缓存，只调一次百度API
+func (s *TTSService) GetOrCreateTTS(ctx context.Context, text string) ([]byte, error) {
+	hash := fmt.Sprintf("%x", md5.Sum([]byte(text)))
+	if cached, ok := audioCache.Load(hash); ok {
+		return cached.([]byte), nil
+	}
 
-func (s *TTSService) CreateTTS(ctx context.Context, text string) (string, error) {
-	accessToken := s.GetAccessToken()
+	audioBytes, err := s.callBaiduAPI(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+
+	audioCache.Store(hash, audioBytes)
+	return audioBytes, nil
+}
+
+// callBaiduAPI 调用百度短文本TTS同步接口
+func (s *TTSService) callBaiduAPI(ctx context.Context, text string) ([]byte, error) {
+	accessToken := s.getAccessToken()
 	if accessToken == "" {
-		return "", fmt.Errorf("failed to get access token")
+		return nil, fmt.Errorf("failed to get access token")
 	}
 
 	syncURL := "https://tsn.baidu.com/text2audio"
@@ -47,35 +62,32 @@ func (s *TTSService) CreateTTS(ctx context.Context, text string) (string, error)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, syncURL, bytes.NewReader([]byte(formData.Encode())))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	audioBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if resp.Header.Get("Content-Type") != "audio/mp3" {
-		log.Println("[TTS Sync] error:", string(audioBytes))
-		return "", fmt.Errorf("tts sync failed: %s", string(audioBytes))
+		log.Println("[TTS] error:", string(audioBytes))
+		return nil, fmt.Errorf("tts failed: %s", string(audioBytes))
 	}
 
-	taskID := fmt.Sprintf("%d", len(audioBytes)) + "local"
-	audioCache.Store(taskID, audioBytes)
-	log.Println("[TTS Sync] success, size:", len(audioBytes))
-	return taskID, nil
+	log.Println("[TTS] success, size:", len(audioBytes))
+	return audioBytes, nil
 }
 
-// ------------------ Access Token ------------------
-
-func (s *TTSService) GetAccessToken() string {
+// getAccessToken 获取百度API access_token
+func (s *TTSService) getAccessToken() string {
 	conf := config.GetConfig()
 
 	apiURL := "https://aip.baidubce.com/oauth/2.0/token"
@@ -108,46 +120,4 @@ func (s *TTSService) GetAccessToken() string {
 	}
 
 	return tokenResp.AccessToken
-}
-
-// ------------------ Query TTS ------------------
-
-type TTSTaskResult struct {
-	SpeechURL string `json:"speech_url,omitempty"`
-}
-
-type TTSTask struct {
-	TaskID     string         `json:"task_id"`
-	TaskStatus string         `json:"task_status"`
-	TaskResult *TTSTaskResult `json:"task_result,omitempty"`
-}
-
-type TTSQueryResponse struct {
-	LogID     string    `json:"log_id"`
-	TasksInfo []TTSTask `json:"tasks_info"`
-}
-
-func (s *TTSService) QueryTTSFull(ctx context.Context, taskID string) (*TTSQueryResponse, error) {
-	if data, ok := audioCache.Load(taskID); ok {
-		audioBytes := data.([]byte)
-		dataURL := "data:audio/mp3;base64," + base64.StdEncoding.EncodeToString(audioBytes)
-		return &TTSQueryResponse{
-			LogID: "local",
-			TasksInfo: []TTSTask{{
-				TaskID:     taskID,
-				TaskStatus: "Success",
-				TaskResult: &TTSTaskResult{
-					SpeechURL: dataURL,
-				},
-			}},
-		}, nil
-	}
-
-	return &TTSQueryResponse{
-		LogID: "local",
-		TasksInfo: []TTSTask{{
-			TaskID:     taskID,
-			TaskStatus: "Failed",
-		}},
-	}, nil
 }

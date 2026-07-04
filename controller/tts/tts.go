@@ -1,10 +1,8 @@
 package tts
 
 import (
-	"deeptalk/common/code"
 	"deeptalk/common/tts"
-	"deeptalk/controller"
-	"log"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -14,83 +12,24 @@ type (
 	TTSRequest struct {
 		Text string `json:"text,omitempty"`
 	}
-	TTSResponse struct {
-		TaskID string `json:"task_id,omitempty"`
-		controller.Response
-	}
-	QueryTTSResponse struct {
-		TaskID     string `json:"task_id,omitempty"`
-		TaskStatus string `json:"task_status,omitempty"`
-		TaskResult string `json:"task_result,omitempty"`
-		controller.Response
-	}
 )
-
-type TTSServices struct {
-	ttsService *tts.TTSService
-}
-
-func NewTTSServices() *TTSServices {
-	return &TTSServices{
-		ttsService: tts.NewTTSService(),
-	}
-}
-
-func CreateTTSTask(c *gin.Context) {
-	tts := NewTTSServices()
+ 
+// PlayTTS 直接返回语音流，一次请求即可播放，相同文本走缓存
+func PlayTTS(c *gin.Context) {
 	req := new(TTSRequest)
-	res := new(TTSResponse)
-	if err := c.ShouldBindJSON(req); err != nil {
-		c.JSON(http.StatusOK, res.CodeOf(code.CodeInvalidParams))
+	if err := c.ShouldBindJSON(req); err != nil || req.Text == "" {
+		c.JSON(http.StatusOK, gin.H{"error": "invalid params"})
 		return
 	}
 
-	if req.Text == "" {
-		c.JSON(http.StatusOK, res.CodeOf(code.CodeInvalidParams))
-		return
-	}
-
-	// 创建TTS任务并返回任务ID，由前端轮询查询结果
-	taskID, err := tts.ttsService.CreateTTS(c, req.Text)
+	ttsSvc := tts.NewTTSService()
+	audioBytes, err := ttsSvc.GetOrCreateTTS(c, req.Text)
 	if err != nil {
-		c.JSON(http.StatusOK, res.CodeOf(code.TTSFail))
+		c.JSON(http.StatusOK, gin.H{"error": "tts failed"})
 		return
 	}
 
-	res.Success()
-	res.TaskID = taskID
-	c.JSON(http.StatusOK, res)
-
-}
-
-func QueryTTSTask(c *gin.Context) {
-	tts := NewTTSServices()
-	res := new(QueryTTSResponse)
-	taskID := c.Query("task_id")
-	if taskID == "" {
-		c.JSON(http.StatusOK, res.CodeOf(code.CodeInvalidParams))
-		return
-	}
-
-	TTSQueryResponse, err := tts.ttsService.QueryTTSFull(c, taskID)
-	if err != nil {
-		log.Println("语音合成失败", err.Error())
-		c.JSON(http.StatusOK, res.CodeOf(code.TTSFail))
-		return
-	}
-
-	if len(TTSQueryResponse.TasksInfo) == 0 {
-		c.JSON(http.StatusOK, res.CodeOf(code.TTSFail))
-		return
-	}
-
-	res.Success()
-	res.TaskID = TTSQueryResponse.TasksInfo[0].TaskID
-
-	// 检查 TaskResult 是否为 nil，避免空指针异常
-	if TTSQueryResponse.TasksInfo[0].TaskResult != nil {
-		res.TaskResult = TTSQueryResponse.TasksInfo[0].TaskResult.SpeechURL
-	}
-	res.TaskStatus = TTSQueryResponse.TasksInfo[0].TaskStatus
-	c.JSON(http.StatusOK, res)
+	c.Header("Content-Type", "audio/mp3")
+	c.Header("Content-Length", fmt.Sprintf("%d", len(audioBytes)))
+	c.Writer.Write(audioBytes)
 }

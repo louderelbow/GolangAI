@@ -169,50 +169,13 @@ export default {
     const playTTS = async (text) => {
       stopAudio()
       try {
-        const createResponse = await api.post('/AI/chat/tts', { text })
-        if (createResponse.data && createResponse.data.status_code === 1000 && createResponse.data.task_id) {
-          const taskId = createResponse.data.task_id
-          const maxAttempts = 30
-          const pollInterval = 1000
-          let attempts = 0
-
-          const pollResult = async () => {
-            const queryResponse = await api.get('/AI/chat/tts/query', { params: { task_id: taskId } })
-            if (queryResponse.data && queryResponse.data.status_code === 1000) {
-              const taskStatus = queryResponse.data.task_status
-              if (taskStatus === 'Success' && queryResponse.data.task_result) {
-                stopAudio()
-                const audio = new Audio(queryResponse.data.task_result)
-                currentAudio = audio
-                audio.play()
-                return true
-              } else if (taskStatus === 'Running' || taskStatus === 'Created') {
-                attempts++
-                if (attempts < maxAttempts) {
-                  await new Promise(resolve => setTimeout(resolve, pollInterval))
-                  return await pollResult()
-                } else {
-                  ElMessage.error('语音合成超时')
-                  return true
-                }
-              } else {
-                ElMessage.error('语音合成失败')
-                return true
-              }
-            }
-            attempts++
-            if (attempts < maxAttempts) {
-              await new Promise(resolve => setTimeout(resolve, pollInterval))
-              return await pollResult()
-            } else {
-              ElMessage.error('语音合成超时')
-              return true
-            }
-          }
-          await pollResult()
-        } else {
-          ElMessage.error('无法创建语音合成任务')
-        }
+        const response = await api.post('/AI/chat/tts/play', { text }, { responseType: 'blob' })
+        const blob = new Blob([response.data], { type: 'audio/mp3' })
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        currentAudio = audio
+        audio.onended = () => URL.revokeObjectURL(url)
+        audio.play()
       } catch (error) {
         console.error('TTS error:', error)
         ElMessage.error('请求语音接口失败')
