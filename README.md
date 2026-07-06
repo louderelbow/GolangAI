@@ -1,6 +1,6 @@
 # DeepTalk
 
-一个基于 Go + Vue 3 构建的 AI 对话平台，采用工厂+策略模式统一调度 5 类大模型，集成 RAG 知识库检索、ReAct Agent 自主工具调用、MCP 协议、限流熔断等功能。
+一个基于 Go + Vue 3 构建的 AI 对话平台，采用工厂+策略模式统一调度 5 类大模型，集成 RAG 知识库检索、ReAct Agent 自主工具调用、MCP 协议、限流降级等功能。
 
 ## 功能特性
 
@@ -9,8 +9,8 @@
 | 🤖 多模型对话 | 工厂+策略模式统一调度 **DeepSeek / RAG / MCP / Ollama / ReAct Agent** 五类模型，新增模型一行注册 |
 | 📚 RAG 知识库 | 智能 Markdown 分片 → 火山方舟 Embedding → Redis Stack 向量索引 → LLM 关键词增强检索 → Prompt 生成，全链路降级 |
 | 🧠 ReAct Agent | Eino 原生 Agent 循环，4 个 InferTool（calculator/datetime/word_count/get_weather），MaxStep=5 自主推理 |
-| 🔌 MCP 协议 | Server + Client 完整实现，StreamableHTTP 传输，支持跨模型工具调用 |
-| 🛡️ 限流熔断 | Redis Token Bucket（Lua 原子性）+ 本地 sync.Map 降级，超限返回 429 |
+| 🔌 MCP 协议 | 集成 mcp-go 协议，StreamableHTTP 传输，支持跨模型工具调用 |
+| 🛡️ 限流降级 | Redis Token Bucket（Lua 原子性）+ 本地 sync.Map 降级，超限返回 429 |
 | 💾 记忆压缩 | Token 动态估算，超 4000 token 触发 LLM 摘要压缩，保留最近 3 轮原始对话 |
 | 🎤 语音合成 | 百度 TTS API，MD5 文本缓存，单次请求直接返回音频流 |
 | 🖼️ 图片识别 | 阿里云 DashScope 多模态 API（qwen-vl-plus），中文描述图片内容 |
@@ -76,7 +76,6 @@ DeepTalk/
 │   │   ├── compressor.go          #   记忆压缩器
 │   │   └── tools.go               #   ReAct Agent 4 个 InferTool
 │   ├── rag/                       # RAG 检索（分片/Embedding/索引/检索）
-│   ├── mcp/                       # MCP Server + Client
 │   ├── tts/                       # 百度 TTS
 │   ├── image/                     # 阿里云 DashScope 多模态识别
 │   ├── mysql/                     # MySQL 连接池

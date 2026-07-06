@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -195,10 +196,12 @@ func NewWordCountTool() tool.InvokableTool {
 		"word_count",
 		"统计文本的字符数和字节数",
 		func(ctx context.Context, input wordCountInput) (wordCountOutput, error) {
-			return wordCountOutput{
+			result := wordCountOutput{
 				CharCount: utf8.RuneCountInString(input.Text),
 				ByteLen:   len(input.Text),
-			}, nil
+			}
+			log.Printf("[Tool:word_count] input=%s -> chars=%d bytes=%d", input.Text, result.CharCount, result.ByteLen)
+			return result, nil
 		},
 	)
 	return t

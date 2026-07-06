@@ -109,9 +109,9 @@ func (c *WeatherAPIClient) GetWeather(ctx context.Context, city string) (*Weathe
 }
 
 /*
-	========================
-	MCP Server
-	========================
+========================
+MCP Server
+========================
 */
 
 func NewMCPServer() *server.MCPServer {

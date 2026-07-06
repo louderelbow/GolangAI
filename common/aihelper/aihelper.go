@@ -52,12 +52,6 @@ func (a *AIHelper) AddMessage(Content string, UserName string, IsUser bool, Save
 	}
 }
 
-// SaveMessage 保存消息到数据库（通过回调函数避免循环依赖）
-// 通过传入func，自己调用外部的保存函数，即可支持同步异步等多种策略
-func (a *AIHelper) SetSaveFunc(saveFunc func(*model.Message) (*model.Message, error)) {
-	a.saveFunc = saveFunc
-}
-
 // GetMessages 获取所有消息历史
 func (a *AIHelper) GetMessages() []*model.Message {
 	a.mu.RLock()
@@ -136,9 +130,4 @@ func (a *AIHelper) StreamResponse(userName string, ctx context.Context, cb Strea
 	a.AddMessage(modelMsg.Content, userName, false, true)
 
 	return modelMsg, nil
-}
-
-// GetModelType 获取模型类型
-func (a *AIHelper) GetModelType() string {
-	return a.model.GetModelType()
 }

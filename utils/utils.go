@@ -56,7 +56,11 @@ func ConvertToModelMessage(sessionID string, userName string, msg *schema.Messag
 
 // 将数据库消息转换为 schema 消息（供 AI 使用）
 func ConvertToSchemaMessages(msgs []*model.Message) []*schema.Message {
-	schemaMsgs := make([]*schema.Message, 0, len(msgs))
+	schemaMsgs := make([]*schema.Message, 0, len(msgs)+1)
+	schemaMsgs = append(schemaMsgs, &schema.Message{
+		Role:    schema.System,
+		Content: time.Now().Format("当前时间：2006-01-02 15:04:05 Monday"),
+	})
 	for _, m := range msgs {
 		role := schema.Assistant
 		if m.IsUser {

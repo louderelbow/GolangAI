@@ -129,22 +129,6 @@ func StreamMessageToExistingSession(userName string, sessionID string, userQuest
 	return code.CodeSuccess
 }
 
-func CreateStreamSessionAndSendMessage(userName string, userQuestion string, modelType string, writer http.ResponseWriter) (string, code.Code) {
-
-	sessionID, code_ := CreateStreamSessionOnly(userName, userQuestion)
-	if code_ != code.CodeSuccess {
-		return "", code_
-	}
-
-	code_ = StreamMessageToExistingSession(userName, sessionID, userQuestion, modelType, writer)
-	if code_ != code.CodeSuccess {
-
-		return sessionID, code_
-	}
-
-	return sessionID, code.CodeSuccess
-}
-
 func ChatSend(userName string, sessionID string, userQuestion string, modelType string) (string, code.Code) {
 	//1：获取AIHelper
 	manager := aihelper.GetGlobalManager()

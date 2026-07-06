@@ -91,8 +91,3 @@ func (f *AIModelFactory) CreateAIHelper(ctx context.Context, modelType string, S
 	}
 	return NewAIHelper(model, SessionID), nil
 }
-
-// RegisterModel 可扩展注册
-func (f *AIModelFactory) RegisterModel(modelType string, creator ModelCreator) {
-	f.creators[modelType] = creator
-}

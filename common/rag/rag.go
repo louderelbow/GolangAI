@@ -3,7 +3,6 @@ package rag
 import (
 	"context"
 	"crypto/md5"
-	"deeptalk/common/redis"
 	redisPkg "deeptalk/common/redis"
 	"deeptalk/config"
 	"encoding/json"
@@ -85,7 +84,7 @@ func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
 	// ===============================
 	indexerConfig := &redisIndexer.IndexerConfig{
 		Client:    rdb,                                     // Redis 客户端
-		KeyPrefix: redis.GenerateIndexNamePrefix(filename), // 不同知识库使用不同前缀，避免冲突
+		KeyPrefix: redisPkg.GenerateIndexNamePrefix(filename), // 不同知识库使用不同前缀，避免冲突
 		BatchSize: 10,                                      // 批量处理文档，提高写入效率
 
 		// 定义：一段文档（Document）在 Redis 中该如何存储
@@ -211,7 +210,7 @@ func NewRAGQuery(ctx context.Context, username string) (*RAGQuery, error) {
 
 	// 创建 retriever
 	rdb := redisPkg.Rdb
-	indexName := redis.GenerateIndexName(filename)
+	indexName := redisPkg.GenerateIndexName(filename)
 
 	retrieverConfig := &redisRetriever.RetrieverConfig{
 		Client:       rdb,

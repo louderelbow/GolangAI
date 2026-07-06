@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"image"
 	"io"
 	"net/http"
 	"os"
@@ -15,7 +14,6 @@ import (
 
 // ======================== 阿里云 DashScope 视觉识别 ========================
 // 使用 config.toml 中 ragModelConfig 的 baseUrl + apiKey
-// 调用 qwen-vl 多模态模型进行图像理解，替代 ONNX MobileNetV2 本地推理
 
 type ImageRecognizer struct {
 	apiKey  string
@@ -50,23 +48,9 @@ func NewImageRecognizer(modelPath, labelPath string, inputH, inputW int) (*Image
 
 func (r *ImageRecognizer) Close() {}
 
-// PredictFromFile 从文件路径识别图像
-func (r *ImageRecognizer) PredictFromFile(imagePath string) (string, error) {
-	data, err := os.ReadFile(imagePath)
-	if err != nil {
-		return "", fmt.Errorf("read image file: %w", err)
-	}
-	return r.callVisionAPI(data)
-}
-
 // PredictFromBuffer 从字节缓冲识别图像
 func (r *ImageRecognizer) PredictFromBuffer(buf []byte) (string, error) {
 	return r.callVisionAPI(buf)
-}
-
-// PredictFromImage 从 image.Image 识别（暂不支持，请使用 PredictFromFile 或 PredictFromBuffer）
-func (r *ImageRecognizer) PredictFromImage(img image.Image) (string, error) {
-	return "", fmt.Errorf("PredictFromImage not implemented, use PredictFromFile or PredictFromBuffer")
 }
 
 // callVisionAPI 调用阿里云 DashScope 多模态 API

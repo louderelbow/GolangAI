@@ -26,10 +26,3 @@ func InitRabbitMQ() {
 		RMQMessage.Consume(MQMessage)
 	}()
 }
-
-// DestroyRabbitMQ 销毁RabbitMQ
-func DestroyRabbitMQ() {
-	if RMQMessage != nil {
-		RMQMessage.Destroy()
-	}
-}

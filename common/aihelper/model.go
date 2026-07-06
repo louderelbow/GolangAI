@@ -823,13 +823,6 @@ func (m *MCPModel) extractCityFromResponse(response string) string {
 // GetModelType 获取模型类型
 func (m *MCPModel) GetModelType() string { return "3" }
 
-// Close 关闭MCP客户端
-func (m *MCPModel) Close() {
-	if m.mcpClient != nil {
-		m.mcpClient.Close()
-	}
-}
-
 // =================== ReAct Agent 实现（类型 "5"） ===================
 
 type ReActModel struct {

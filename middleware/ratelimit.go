@@ -29,12 +29,6 @@ const (
 	rateLimitKeyPrefix = "ratelimit:"
 )
 
-// 测试用：临时降低阈值验证限流效果
-const (
-	testCapacity = 3   // 测试容量
-	testRefill   = 1   // 测试每秒补充数
-)
-
 // bucketState 存储在 Redis 或本地内存中的桶状态
 type bucketState struct {
 	Tokens   float64 `json:"tokens"`
