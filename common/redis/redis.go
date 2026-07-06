@@ -86,11 +86,12 @@ func InitRedisIndex(ctx context.Context, filename string, dimension int) error {
 
 	prefix := GenerateIndexNamePrefix(filename)
 
-	// 创建索引
+	// 创建索引（content 字段启用中文分词）
 	createArgs := []interface{}{
 		"FT.CREATE", indexName,
 		"ON", "HASH",
 		"PREFIX", "1", prefix,
+		"LANGUAGE", "chinese",
 		"SCHEMA",
 		"content", "TEXT",
 		"metadata", "TEXT",

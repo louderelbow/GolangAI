@@ -2,15 +2,14 @@ package rag
 
 import (
 	"context"
-	"crypto/md5"
 	redisPkg "deeptalk/common/redis"
 	"deeptalk/config"
-	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
-	"time"
 
 	embeddingArk "github.com/cloudwego/eino-ext/components/embedding/ark"
 	redisIndexer "github.com/cloudwego/eino-ext/components/indexer/redis"
@@ -29,6 +28,9 @@ type RAGIndexer struct {
 type RAGQuery struct {
 	embedding embedding.Embedder
 	retriever retriever.Retriever
+	filename  string
+	indexName string
+	rdb       *redisCli.Client
 }
 
 // 构建知识库索引
@@ -83,9 +85,9 @@ func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
 	// 3. 配置索引器（定义：文档如何被存进 Redis）
 	// ===============================
 	indexerConfig := &redisIndexer.IndexerConfig{
-		Client:    rdb,                                     // Redis 客户端
+		Client:    rdb,                                        // Redis 客户端
 		KeyPrefix: redisPkg.GenerateIndexNamePrefix(filename), // 不同知识库使用不同前缀，避免冲突
-		BatchSize: 10,                                      // 批量处理文档，提高写入效率
+		BatchSize: 10,                                         // 批量处理文档，提高写入效率
 
 		// 定义：一段文档（Document）在 Redis 中该如何存储
 		DocumentToHashes: func(ctx context.Context, doc *schema.Document) (*redisIndexer.Hashes, error) {
@@ -245,32 +247,132 @@ func NewRAGQuery(ctx context.Context, username string) (*RAGQuery, error) {
 	return &RAGQuery{
 		embedding: embedder,
 		retriever: rtr,
+		filename:  filename,
+		indexName: indexName,
+		rdb:       rdb,
 	}, nil
 }
 
-// RetrieveDocuments 检索相关文档（带 Embedding 缓存）
+// RetrieveDocuments 混合检索（向量 + 关键词 + RRF 融合）
 func (r *RAGQuery) RetrieveDocuments(ctx context.Context, query string) ([]*schema.Document, error) {
-	// 尝试从 Redis 缓存获取
-	cacheKey := "rag_cache:" + fmt.Sprintf("%x", md5.Sum([]byte(query)))
-	if cached, err := redisPkg.Rdb.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
-		var docs []*schema.Document
-		if json.Unmarshal([]byte(cached), &docs) == nil {
-			return docs, nil
+	// 1. 向量检索
+	vecDocs, err := r.retriever.Retrieve(ctx, query)
+	if err != nil {
+		log.Printf("[RAG] vector retrieve failed: %v, fallback to keyword only", err)
+		vecDocs = nil
+	}
+	log.Printf("[RAG] vector retrieve: %d docs", len(vecDocs))
+
+	// 2. 关键词检索
+	kwDocs := r.keywordSearch(ctx, query)
+	log.Printf("[RAG] keyword retrieve: %d docs", len(kwDocs))
+
+	// 3. RRF 融合排序
+	var finalDocs []*schema.Document
+	if len(vecDocs) > 0 && len(kwDocs) > 0 {
+		finalDocs = rrf(vecDocs, kwDocs, 60)
+		log.Printf("[RAG] RRF fused: vector=%d keyword=%d -> final=%d", len(vecDocs), len(kwDocs), len(finalDocs))
+	} else if len(vecDocs) > 0 {
+		finalDocs = vecDocs
+		log.Printf("[RAG] keyword returned 0, using vector only: %d docs", len(finalDocs))
+	} else {
+		finalDocs = kwDocs
+		log.Printf("[RAG] vector returned 0, using keyword only: %d docs", len(finalDocs))
+	}
+
+	return finalDocs, nil
+}
+
+// keywordSearch 关键词全文检索（RediSearch + Friso 中文分词）
+func (r *RAGQuery) keywordSearch(ctx context.Context, query string) []*schema.Document {
+	if r.rdb == nil || r.indexName == "" {
+		log.Printf("[RAG] keyword search SKIPPED: rdb=%v indexName=%q", r.rdb != nil, r.indexName)
+		return nil
+	}
+
+	// FT.SEARCH idx query LANGUAGE chinese LIMIT 0 5
+	raw, err := r.rdb.Do(ctx, "FT.SEARCH", r.indexName, query, "LANGUAGE", "chinese", "LIMIT", "0", "5").Result()
+	if err != nil {
+		log.Printf("[RAG] keyword search failed: %v", err)
+		return nil
+	}
+
+	// 解析 FT.SEARCH 返回：[total, key1, [field1, val1, ...], key2, ...]
+	arr, ok := raw.([]interface{})
+	if !ok || len(arr) < 2 {
+		log.Printf("[RAG] keyword search: 0 results or unexpected format, raw=%v", raw)
+		return nil
+	}
+	total := int(arr[0].(int64))
+	log.Printf("[RAG] keyword search hit %d docs for query: %s", total, query)
+
+	docs := make([]*schema.Document, 0)
+	for i := 1; i < len(arr); i += 2 {
+		key := fmt.Sprintf("%v", arr[i])
+		fieldsArr, ok := arr[i+1].([]interface{})
+		if !ok {
+			continue
+		}
+		fields := map[string]string{}
+		for j := 0; j+1 < len(fieldsArr); j += 2 {
+			fields[fmt.Sprintf("%v", fieldsArr[j])] = fmt.Sprintf("%v", fieldsArr[j+1])
+		}
+		content := ""
+		if c, ok := fields["content"]; ok {
+			content = c
+		}
+		meta := map[string]any{}
+		for k, v := range fields {
+			if k != "content" {
+				meta[k] = v
+			}
+		}
+		docs = append(docs, &schema.Document{
+			ID:       key,
+			Content:  content,
+			MetaData: meta,
+		})
+	}
+	return docs
+}
+
+// rrf 融合向量和关键词两路排序结果
+// score(doc) = Σ 1/(k + rank_i)  k 通常取 60
+func rrf(rankA, rankB []*schema.Document, k float64) []*schema.Document {
+	scores := map[string]float64{}
+	order := map[string]*schema.Document{}
+
+	for i, d := range rankA {
+		scores[d.ID] += 1.0 / (k + float64(i+1))
+		order[d.ID] = d
+	}
+	for i, d := range rankB {
+		scores[d.ID] += 1.0 / (k + float64(i+1))
+		order[d.ID] = d
+	}
+
+	type pair struct {
+		id    string
+		score float64
+	}
+	list := make([]pair, 0, len(scores))
+	for id, s := range scores {
+		list = append(list, pair{id, s})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].score > list[j].score
+	})
+
+	result := make([]*schema.Document, 0, len(list))
+	for _, p := range list {
+		if len(result) >= 5 {
+			break
+		}
+		if d, ok := order[p.id]; ok {
+			result = append(result, d)
 		}
 	}
-
-	// 缓存未命中，调 Embedding 检索
-	docs, err := r.retriever.Retrieve(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve documents: %w", err)
-	}
-
-	// 写入缓存（1 小时 TTL）
-	if data, err := json.Marshal(docs); err == nil {
-		redisPkg.Rdb.Set(ctx, cacheKey, string(data), time.Hour)
-	}
-
-	return docs, nil
+	return result
 }
 
 // BuildRAGPrompt 构建包含检索文档的提示词
