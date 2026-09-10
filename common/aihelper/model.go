@@ -52,24 +52,22 @@ type OpenAIModel struct {
 }
 
 // deepSeekSettings 解析大模型（OpenAI 兼容）连接配置
-// 优先级：config.toml 的 [deepSeekConfig] > 环境变量 > 代码默认值
+// 来源：环境变量 > 代码默认值
+//   DEEPSEEK_BASE_URL / OPENAI_BASE_URL     默认 https://api.deepseek.com
+//   DEEPSEEK_MODEL_NAME / OPENAI_MODEL_NAME 默认 deepseek-chat
+//   DEEPSEEK_API_KEY / OPENAI_API_KEY       默认空
 func deepSeekSettings() (baseURL, modelName, apiKey string) {
-	cfg := config.GetConfig().DeepSeekConfig
-
 	baseURL = firstNonEmpty(
-		cfg.BaseURL,
 		os.Getenv("DEEPSEEK_BASE_URL"),
 		os.Getenv("OPENAI_BASE_URL"),
 		"https://api.deepseek.com",
 	)
 	modelName = firstNonEmpty(
-		cfg.ModelName,
 		os.Getenv("DEEPSEEK_MODEL_NAME"),
 		os.Getenv("OPENAI_MODEL_NAME"),
 		"deepseek-chat",
 	)
 	apiKey = firstNonEmpty(
-		cfg.APIKey,
 		os.Getenv("DEEPSEEK_API_KEY"),
 		os.Getenv("OPENAI_API_KEY"),
 	)

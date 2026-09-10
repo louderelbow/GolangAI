@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -101,11 +102,16 @@ func (s *mcpServer) allowed(toolName string) bool {
 type MCPRegistry struct {
 	servers []*mcpServer
 
-	mu     sync.RWMutex
-	tools  []tool.BaseTool
-	loaded bool
-	err    error
+	mu       sync.RWMutex
+	tools    []tool.BaseTool
+	loaded   bool
+	loadedAt time.Time
+	err      error
 }
+
+// emptyRetryInterval 一次都没拉到工具时的重试间隔：
+// 否则"启动时 MCP 服务没起来"会被永久缓存，之后必须重启后端才能用上工具
+const emptyRetryInterval = 60 * time.Second
 
 var (
 	globalMCPRegistry *MCPRegistry
@@ -160,10 +166,16 @@ func (r *MCPRegistry) Tools(ctx context.Context) []tool.BaseTool {
 	r.mu.RLock()
 	if r.loaded {
 		tools := r.tools
+		stale := len(tools) == 0 && time.Since(r.loadedAt) > emptyRetryInterval
 		r.mu.RUnlock()
-		return tools
+		if !stale {
+			return tools
+		}
+		// 上次一个工具都没拉到：过一会儿再试，避免必须重启服务
+		log.Printf("[MCP] no tools cached, retrying registry load")
+	} else {
+		r.mu.RUnlock()
 	}
-	r.mu.RUnlock()
 
 	r.load(ctx)
 
@@ -228,6 +240,7 @@ func (r *MCPRegistry) load(ctx context.Context) {
 
 	r.tools = tools
 	r.loaded = true
+	r.loadedAt = time.Now()
 	log.Printf("[MCP] registry ready: %d tools from %d servers", len(tools), len(r.servers))
 }
 
