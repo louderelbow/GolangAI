@@ -116,6 +116,12 @@ cp config/config.toml.example config/config.toml
 mysql -u root -p < gopherai.sql
 ```
 
+> **已有数据库升级**：会话新增了 `model_type` 字段（会话级模型绑定），需要先执行迁移：
+> ```bash
+> mysql -u root -p deeptalk < gopherai_migration_001.sql
+> ```
+> 否则会话相关接口会报 `Unknown column 'model_type'`。
+
 ### 3. 启动后端
 
 ```bash
@@ -146,12 +152,12 @@ npm run serve
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/AI/chat/sessions` | 获取用户会话列表 |
-| POST | `/api/v1/AI/chat/send-new-session` | 创建新会话并发送 |
-| POST | `/api/v1/AI/chat/send` | 发送消息（body 含 modelType: 1-5） |
+| GET | `/api/v1/AI/chat/sessions` | 获取用户会话列表（含每个会话绑定的 `modelType`） |
+| POST | `/api/v1/AI/chat/send-new-session` | 创建新会话并发送（此处 `modelType` 生效） |
+| POST | `/api/v1/AI/chat/send` | 发送消息（`modelType` 被忽略，以会话绑定为准） |
 | POST | `/api/v1/AI/chat/history` | 获取会话历史 |
-| POST | `/api/v1/AI/chat/send-stream-new-session` | 流式创建新会话 |
-| POST | `/api/v1/AI/chat/send-stream` | 流式发送 |
+| POST | `/api/v1/AI/chat/send-stream-new-session` | 流式创建新会话（首个事件返回 `sessionId` + `modelType`） |
+| POST | `/api/v1/AI/chat/send-stream` | 流式发送（`modelType` 被忽略） |
 | POST | `/api/v1/AI/chat/tts/play` | 语音合成（文本 MD5 缓存，返回 audio/mp3 流） |
 
 ### 其他（需要 JWT）
@@ -163,13 +169,35 @@ npm run serve
 
 ### 模型类型说明
 
+会话创建时绑定模型，**创建后不可更改**：前端在已有会话中只读展示当前模型，只有「新聊天」才允许选择。
+
 | modelType | 模型 | 说明 |
 |-----------|------|------|
 | 1 | DeepSeek | OpenAI 兼容协议，默认聊天 |
 | 2 | 阿里百炼 RAG | 知识库检索增强生成 |
-| 3 | 阿里百炼 MCP | MCP 协议工具调用 |
-| 4 | Ollama | 本地离线模型 |
+| 3 | 阿里百炼 MCP | MCP 协议工具调用（需先启动 MCP 服务，见下） |
+| 4 | Ollama | 本地离线模型，地址/模型名可用 `OLLAMA_BASE_URL` / `OLLAMA_MODEL_NAME` 覆盖 |
 | 5 | ReAct Agent | Eino 原生 Agent + 4 工具 |
+
+未记录 `model_type` 的历史会话按默认模型 `2`（RAG）处理。
+
+### 流式协议（SSE）
+
+所有事件均为 `data: <json>`，`[DONE]` 表示结束：
+
+```
+data: {"sessionId": "xxx", "modelType": "2"}   // 新建会话时首个事件
+data: {"content": "增量文本"}
+data: {"error": "错误信息"}
+data: [DONE]
+```
+
+### MCP 服务（modelType=3 需要）
+
+```bash
+go run ./common/mcp -http-addr :8081
+# 后端默认连接 http://localhost:8081/mcp，可用 MCP_BASE_URL 覆盖
+```
 
 ## 限流说明
 

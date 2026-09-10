@@ -55,12 +55,19 @@ func ConvertToModelMessage(sessionID string, userName string, msg *schema.Messag
 }
 
 // 将数据库消息转换为 schema 消息（供 AI 使用）
-func ConvertToSchemaMessages(msgs []*model.Message) []*schema.Message {
-	schemaMsgs := make([]*schema.Message, 0, len(msgs)+1)
+// summary 为被压缩掉的早期历史摘要，作为 system 上下文注入；传空表示无摘要
+func ConvertToSchemaMessages(msgs []*model.Message, summary string) []*schema.Message {
+	schemaMsgs := make([]*schema.Message, 0, len(msgs)+2)
 	schemaMsgs = append(schemaMsgs, &schema.Message{
 		Role:    schema.System,
 		Content: time.Now().Format("当前时间：2006-01-02 15:04:05 Monday"),
 	})
+	if summary != "" {
+		schemaMsgs = append(schemaMsgs, &schema.Message{
+			Role:    schema.System,
+			Content: "以下是本次会话更早之前内容的摘要，请把它当作已经发生过的上下文：\n" + summary,
+		})
+	}
 	for _, m := range msgs {
 		role := schema.Assistant
 		if m.IsUser {

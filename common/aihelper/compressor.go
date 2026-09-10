@@ -1,6 +1,7 @@
 package aihelper
 
 import (
+	"context"
 	"deeptalk/config"
 	"deeptalk/model"
 	"fmt"
@@ -30,7 +31,8 @@ func (c *Compressor) ShouldCompress(messages []*model.Message) bool {
 }
 
 // Compress 压缩历史消息：保留最近 N 轮，旧消息用 LLM 生成摘要
-func (c *Compressor) Compress(messages []*model.Message, llm AIModel) ([]*model.Message, string, error) {
+// 返回：保留的消息列表 + 旧消息摘要（调用方负责把摘要作为 system 消息注入，不要当成 assistant 回复）
+func (c *Compressor) Compress(ctx context.Context, messages []*model.Message, llm AIModel) ([]*model.Message, string, error) {
 	totalTokens := c.estimateTokens(messages)
 	if totalTokens <= c.maxTokens || len(messages) <= 4 {
 		return messages, "", nil
@@ -45,22 +47,13 @@ func (c *Compressor) Compress(messages []*model.Message, llm AIModel) ([]*model.
 	recentMsgs := messages[keepFrom:]
 
 	// 生成旧消息摘要
-	summary, err := c.summarize(oldMsgs, llm)
+	summary, err := c.summarize(ctx, oldMsgs, llm)
 	if err != nil {
 		log.Printf("[Compressor] summarize failed: %v, skipping compression", err)
-		return messages, "", nil
+		return messages, "", err
 	}
 
-	// 构造新的消息列表：system(摘要) + 最近的消息
-	newMsgs := make([]*model.Message, 0, len(recentMsgs)+1)
-	newMsgs = append(newMsgs, &model.Message{
-		Content:  summary,
-		IsUser:   false,
-		UserName: "system",
-	})
-	newMsgs = append(newMsgs, recentMsgs...)
-
-	return newMsgs, summary, nil
+	return recentMsgs, summary, nil
 }
 
 // estimateTokens 估算消息列表的 Token 数
@@ -74,20 +67,24 @@ func (c *Compressor) estimateTokens(messages []*model.Message) int {
 
 // countTokens 粗略估算中文/英文混合文本的 Token 数
 func (c *Compressor) countTokens(text string) int {
-	runes := utf8.RuneCountInString(text)
-	// 简单策略：英文字符约 1 token/4 chars，中文字符约 1 token/1-2 chars
 	asciiCount := 0
 	for _, r := range text {
 		if r < 128 {
 			asciiCount++
 		}
 	}
-	nonAscii := runes - asciiCount
-	return asciiCount/4 + nonAscii/2
+	nonAscii := utf8.RuneCountInString(text) - asciiCount
+	// 英文字符约 4 chars/token，中文约 2 chars/token，向上取整避免短文本被算成 0
+	return (asciiCount+3)/4 + (nonAscii+1)/2
 }
 
 // summarize 调用 LLM 生成旧消息的简洁摘要
-func (c *Compressor) summarize(messages []*model.Message, llm AIModel) (string, error) {
+// 注意：ctx 必须透传（不能传 nil），否则底层 HTTP 客户端会空指针 panic
+func (c *Compressor) summarize(ctx context.Context, messages []*model.Message, llm AIModel) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// 构造 old messages 文本
 	var sb strings.Builder
 	for _, msg := range messages {
@@ -103,11 +100,14 @@ func (c *Compressor) summarize(messages []*model.Message, llm AIModel) (string, 
 		{Role: schema.User, Content: fmt.Sprintf("请概括以下对话：\n%s", sb.String())},
 	}
 
-	resp, err := llm.GenerateResponse(nil, prompt)
+	resp, err := llm.GenerateResponse(ctx, prompt)
 	if err != nil {
 		return "", err
 	}
-	return "[对话摘要] " + resp.Content, nil
+	if resp == nil {
+		return "", fmt.Errorf("empty summary response")
+	}
+	return resp.Content, nil
 }
 
 // GetMaxTokens 获取配置的最大 Token 数

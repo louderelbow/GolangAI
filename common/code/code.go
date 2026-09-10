@@ -13,6 +13,7 @@ const (
 	CodeInvalidPassword Code = 2004
 	CodeInvalidToken    Code = 2006
 	CodeInvalidCaptcha  Code = 2008
+	CodeSessionNotExist Code = 2009
 
 	CodeServerBusy Code = 4001
 	CodeRateLimited Code = 4002
@@ -29,6 +30,7 @@ var msg = map[Code]string{
 	CodeInvalidPassword: "用户名或密码错误",
 	CodeInvalidToken:    "无效的Token",
 	CodeInvalidCaptcha:  "验证码错误",
+	CodeSessionNotExist: "会话不存在",
 
 	CodeServerBusy:  "服务繁忙",
 	CodeRateLimited: "请求过于频繁，请稍后再试",

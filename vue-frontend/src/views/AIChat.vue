@@ -47,13 +47,19 @@
       <div class="topbar">
         <div class="topbar-left">
           <span class="topbar-title">AI 对话</span>
-          <select id="modelType" v-model="selectedModel" class="model-select">
-            <option value="1">DeepSeek</option>
-            <option value="2">阿里百炼 RAG</option>
-            <option value="3">阿里百炼 MCP</option>
-            <option value="4">Ollama</option>
-            <option value="5">ReAct Agent</option>
+          <select
+            id="modelType"
+            v-model="modelSelectValue"
+            class="model-select"
+            :disabled="modelLocked"
+            :title="modelHint"
+          >
+            <option v-for="opt in MODEL_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
+          <span :class="['model-hint', { locked: modelLocked }]">
+            <svg v-if="modelLocked" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            {{ modelHint }}
+          </span>
         </div>
         <div class="topbar-right">
           <label class="stream-label">
@@ -129,10 +135,46 @@ export default {
     const loading = ref(false)
     const messagesRef = ref(null)
     const messageInput = ref(null)
-    const selectedModel = ref('2')
+    const selectedModel = ref('2')   // 仅用于「新会话」的模型选择
     const isStreaming = ref(false)
     const uploading = ref(false)
     const fileInput = ref(null)
+
+    const MODEL_OPTIONS = [
+      { value: '1', label: 'DeepSeek' },
+      { value: '2', label: '阿里百炼 RAG' },
+      { value: '3', label: '阿里百炼 MCP' },
+      { value: '4', label: 'Ollama' },
+      { value: '5', label: 'ReAct Agent' }
+    ]
+
+    const modelLabel = (value) => {
+      const hit = MODEL_OPTIONS.find(o => o.value === String(value || ''))
+      return hit ? hit.label : '未知模型'
+    }
+
+    // 当前会话实际绑定的模型：新会话取下拉框选择，已有会话取服务端返回的绑定值
+    const activeModel = computed(() => {
+      if (tempSession.value) return selectedModel.value
+      const current = sessions.value[currentSessionId.value]
+      return current && current.modelType ? String(current.modelType) : ''
+    })
+
+    // 会话的模型创建后不可更改：非新会话时下拉框禁用、只展示
+    const modelLocked = computed(() => !tempSession.value)
+
+    const modelSelectValue = computed({
+      get: () => (tempSession.value ? selectedModel.value : activeModel.value),
+      set: (value) => {
+        if (tempSession.value) selectedModel.value = value
+      }
+    })
+
+    const modelHint = computed(() => {
+      if (tempSession.value) return '新会话 · 可选择模型'
+      const model = activeModel.value
+      return model ? `当前会话模型：${modelLabel(model)}（不可更改）` : '当前会话模型：未知（不可更改）'
+    })
 
     const dotStyle = (i) => {
       const size = 1.5 + (i % 3) * 1.5
@@ -147,9 +189,17 @@ export default {
       }
     }
 
+    const escapeHtml = (text) => String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+
+    // 先转义再套轻量 markdown：模型输出（含被检索文档诱导的内容）不能作为 HTML 执行
     const renderMarkdown = (text) => {
       if (!text && text !== '') return ''
-      return String(text)
+      return escapeHtml(text)
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.*?)\*/g, '<em>$1</em>')
         .replace(/`(.*?)`/g, '<code>$1</code>')
@@ -189,7 +239,12 @@ export default {
           const sessionMap = {}
           response.data.sessions.forEach(s => {
             const sid = String(s.sessionId)
-            sessionMap[sid] = { id: sid, name: s.name || `会话 ${sid}`, messages: [] }
+            sessionMap[sid] = {
+              id: sid,
+              name: s.name || `会话 ${sid}`,
+              modelType: s.modelType ? String(s.modelType) : '', // 服务端返回的会话绑定模型
+              messages: []
+            }
           })
           sessions.value = sessionMap
         }
@@ -303,9 +358,12 @@ export default {
 
       const url = tempSession.value ? '/api/AI/chat/send-stream-new-session' : '/api/AI/chat/send-stream'
       const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` }
+      const requestModel = activeModel.value || selectedModel.value
       const body = tempSession.value
-        ? { question: question, modelType: selectedModel.value }
-        : { question: question, modelType: selectedModel.value, sessionId: currentSessionId.value }
+        ? { question: question, modelType: requestModel }
+        : { question: question, modelType: requestModel, sessionId: currentSessionId.value }
+
+      let streamError = ''
 
       try {
         const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) })
@@ -314,6 +372,13 @@ export default {
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
+
+        const appendContent = (text) => {
+          if (!text) return
+          currentMessages.value[aiMessageIndex].content += text
+          currentMessages.value = [...currentMessages.value]
+          scrollToBottom()
+        }
 
         for (;;) {
           const { done, value } = await reader.read()
@@ -325,39 +390,62 @@ export default {
 
           for (const line of lines) {
             const trimmedLine = line.trim()
-            if (!trimmedLine) continue
-            if (trimmedLine.startsWith('data:')) {
-              const data = trimmedLine.slice(5).trim()
-              if (data === '[DONE]') {
-                loading.value = false
-                currentMessages.value[aiMessageIndex].meta = { status: 'done' }
-                currentMessages.value = [...currentMessages.value]
-              } else if (data.startsWith('{')) {
-                try {
-                  const parsed = JSON.parse(data)
-                  if (parsed.sessionId) {
-                    const newSid = String(parsed.sessionId)
-                    if (tempSession.value) {
-                      sessions.value[newSid] = { id: newSid, name: '新会话', messages: [...currentMessages.value] }
-                      currentSessionId.value = newSid
-                      tempSession.value = false
-                    }
-                  }
-                } catch (e) {
-                  currentMessages.value[aiMessageIndex].content += data
-                }
-              } else {
-                currentMessages.value[aiMessageIndex].content += data
-              }
+            if (!trimmedLine || !trimmedLine.startsWith('data:')) continue
+            const data = trimmedLine.slice(5).trim()
+            if (!data) continue
+
+            if (data === '[DONE]') {
+              loading.value = false
+              currentMessages.value[aiMessageIndex].meta = { status: 'done' }
               currentMessages.value = [...currentMessages.value]
-              await new Promise(resolve => requestAnimationFrame(() => { scrollToBottom(); resolve() }))
+              continue
             }
+
+            // 新协议：所有事件都是 JSON（content / sessionId+modelType / error）
+            let payload = null
+            if (data.startsWith('{')) {
+              try { payload = JSON.parse(data) } catch (e) { payload = null }
+            }
+
+            if (payload && typeof payload === 'object') {
+              if (payload.error) {
+                streamError = String(payload.error)
+                continue
+              }
+              if (payload.sessionId) {
+                const newSid = String(payload.sessionId)
+                if (tempSession.value) {
+                  sessions.value[newSid] = {
+                    id: newSid,
+                    name: '新会话',
+                    modelType: String(payload.modelType || requestModel), // 服务端确认的绑定模型
+                    messages: [...currentMessages.value]
+                  }
+                  currentSessionId.value = newSid
+                  tempSession.value = false
+                }
+                continue
+              }
+              if (typeof payload.content === 'string') {
+                appendContent(payload.content)
+                continue
+              }
+              continue
+            }
+
+            // 兼容旧后端的纯文本分片
+            appendContent(data)
           }
         }
+        await new Promise(resolve => requestAnimationFrame(resolve))
 
         loading.value = false
-        currentMessages.value[aiMessageIndex].meta = { status: 'done' }
+        currentMessages.value[aiMessageIndex].meta = { status: streamError ? 'error' : 'done' }
         currentMessages.value = [...currentMessages.value]
+
+        if (streamError) {
+          ElMessage.error(streamError)
+        }
 
         if (!tempSession.value && currentSessionId.value && sessions.value[currentSessionId.value]) {
           const sessMsgs = sessions.value[currentSessionId.value].messages
@@ -382,8 +470,14 @@ export default {
         const response = await api.post('/AI/chat/send-new-session', { question, modelType: selectedModel.value })
         if (response.data && response.data.status_code === 1000) {
           const sessionId = String(response.data.sessionId)
+          const modelType = String(response.data.modelType || selectedModel.value)
           const aiMessage = { role: 'assistant', content: response.data.Information || '' }
-          sessions.value[sessionId] = { id: sessionId, name: '新会话', messages: [{ role: 'user', content: question }, aiMessage] }
+          sessions.value[sessionId] = {
+            id: sessionId,
+            name: '新会话',
+            modelType,
+            messages: [{ role: 'user', content: question }, aiMessage]
+          }
           currentSessionId.value = sessionId
           tempSession.value = false
           currentMessages.value = [...sessions.value[sessionId].messages]
@@ -394,7 +488,8 @@ export default {
       } else {
         const sessionMsgs = sessions.value[currentSessionId.value].messages
         sessionMsgs.push({ role: 'user', content: question })
-        const response = await api.post('/AI/chat/send', { question, modelType: selectedModel.value, sessionId: currentSessionId.value })
+        // 已有会话的模型由服务端按会话绑定决定，这里传值仅用于兼容
+        const response = await api.post('/AI/chat/send', { question, modelType: activeModel.value, sessionId: currentSessionId.value })
         if (response.data && response.data.status_code === 1000) {
           const aiMessage = { role: 'assistant', content: response.data.Information || '' }
           sessionMsgs.push(aiMessage)
@@ -451,6 +546,7 @@ export default {
       sessions: computed(() => Object.values(sessions.value)),
       currentSessionId, tempSession, currentMessages, inputMessage, loading,
       messagesRef, messageInput, selectedModel, isStreaming, uploading, fileInput,
+      MODEL_OPTIONS, modelSelectValue, modelLocked, modelHint,
       dotStyle, renderMarkdown, playTTS, createNewSession, switchSession, syncHistory,
       sendMessage, triggerFileUpload, handleFileUpload
     }
@@ -674,6 +770,24 @@ export default {
 .model-select option {
   background: #1a1a2e;
   color: white;
+}
+
+.model-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.model-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.32);
+  white-space: nowrap;
+}
+
+.model-hint.locked {
+  color: rgba(167, 139, 250, 0.75);
 }
 
 .topbar-right {

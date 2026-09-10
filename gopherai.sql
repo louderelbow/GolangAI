@@ -35,6 +35,7 @@ CREATE TABLE `sessions` (
   `id`         VARCHAR(36)  NOT NULL,
   `user_name`  VARCHAR(191) NOT NULL,
   `title`      VARCHAR(100) DEFAULT '',
+  `model_type` VARCHAR(8)   NOT NULL DEFAULT '2' COMMENT '会话绑定的模型类型 1DeepSeek 2RAG 3MCP 4Ollama 5ReAct',
   `created_at` DATETIME     DEFAULT NULL,
   `updated_at` DATETIME     DEFAULT NULL,
   `deleted_at` DATETIME     DEFAULT NULL,

@@ -10,7 +10,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/cloudwego/eino-ext/components/model/ollama"
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -457,9 +459,13 @@ func (o *AliRAGModel) filterByRelevance(docs []*schema.Document) []*schema.Docum
 	const maxDistance = 0.5
 	filtered := make([]*schema.Document, 0, len(docs))
 	for _, doc := range docs {
-		if dist, ok := doc.MetaData["distance"].(float64); ok && dist < maxDistance {
+		dist, ok := parseDistance(doc.MetaData["distance"])
+		if !ok {
+			// 没有距离信息时不能当作"不相关"丢掉
 			filtered = append(filtered, doc)
-		} else if doc.MetaData["distance"] == nil {
+			continue
+		}
+		if dist < maxDistance {
 			filtered = append(filtered, doc)
 		}
 	}
@@ -469,12 +475,37 @@ func (o *AliRAGModel) filterByRelevance(docs []*schema.Document) []*schema.Docum
 	return filtered
 }
 
+// parseDistance 解析检索结果中的 distance。
+// Redis(FT.SEARCH) 返回的字段是字符串，go-redis 的 Document.Fields 也是 map[string]string，
+// 因此这里必须兼容 string，不能只断言 float64。
+func parseDistance(v any) (float64, bool) {
+	switch d := v.(type) {
+	case float64:
+		return d, true
+	case float32:
+		return float64(d), true
+	case int:
+		return float64(d), true
+	case int64:
+		return float64(d), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(d), 64)
+		return f, err == nil
+	case []byte:
+		f, err := strconv.ParseFloat(strings.TrimSpace(string(d)), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
 // =================== MCP 实现 ===================
 
 // MCPModel MCP模型实现，集成MCP服务
 type MCPModel struct {
 	llm        model.ToolCallingChatModel
 	mcpClient  *client.Client
+	mcpMu      sync.Mutex // 保护 mcpClient 的懒初始化
 	username   string
 	mcpBaseURL string
 }
@@ -505,7 +536,10 @@ func NewMCPModel(ctx context.Context, username string) (*MCPModel, error) {
 		return nil, fmt.Errorf("create mcp model failed: %v", err)
 	}
 
-	mcpBaseURL := "http://localhost:8081/mcp"
+	mcpBaseURL := os.Getenv("MCP_BASE_URL")
+	if mcpBaseURL == "" {
+		mcpBaseURL = "http://localhost:8081/mcp"
+	}
 
 	return &MCPModel{
 		llm:        llm,
@@ -514,30 +548,38 @@ func NewMCPModel(ctx context.Context, username string) (*MCPModel, error) {
 	}, nil
 }
 
-// getMCPClient 获取或创建MCP客户端
+// getMCPClient 获取或创建MCP客户端（并发安全，同一实例只建一次）
 func (m *MCPModel) getMCPClient(ctx context.Context) (*client.Client, error) {
-	if m.mcpClient == nil {
-		// 创建MCP客户端
-		httpTransport, err := transport.NewStreamableHTTP(m.mcpBaseURL)
-		if err != nil {
-			return nil, fmt.Errorf("create mcp transport failed: %v", err)
-		}
+	m.mcpMu.Lock()
+	defer m.mcpMu.Unlock()
 
-		m.mcpClient = client.NewClient(httpTransport)
-
-		// 初始化MCP客户端
-		initRequest := mcp.InitializeRequest{}
-		initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-		initRequest.Params.ClientInfo = mcp.Implementation{
-			Name:    "MCP-Go AIHelper Client",
-			Version: "1.0.0",
-		}
-		initRequest.Params.Capabilities = mcp.ClientCapabilities{}
-
-		if _, err := m.mcpClient.Initialize(ctx, initRequest); err != nil {
-			return nil, fmt.Errorf("mcp client initialize failed: %v", err)
-		}
+	if m.mcpClient != nil {
+		return m.mcpClient, nil
 	}
+
+	// 创建MCP客户端
+	httpTransport, err := transport.NewStreamableHTTP(m.mcpBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("create mcp transport failed: %v", err)
+	}
+
+	mcpClient := client.NewClient(httpTransport)
+
+	// 初始化MCP客户端
+	initRequest := mcp.InitializeRequest{}
+	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initRequest.Params.ClientInfo = mcp.Implementation{
+		Name:    "MCP-Go AIHelper Client",
+		Version: "1.0.0",
+	}
+	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
+
+	if _, err := mcpClient.Initialize(ctx, initRequest); err != nil {
+		_ = mcpClient.Close()
+		return nil, fmt.Errorf("mcp client initialize failed: %v", err)
+	}
+
+	m.mcpClient = mcpClient
 	return m.mcpClient, nil
 }
 
@@ -831,14 +873,31 @@ type ReActModel struct {
 }
 
 func NewReActModel(ctx context.Context) (*ReActModel, error) {
+	// 与 OpenAIModel 保持同样的配置来源（环境变量优先）
+	baseURL := os.Getenv("DEEPSEEK_BASE_URL")
+	if baseURL == "" {
+		baseURL = os.Getenv("OPENAI_BASE_URL")
+	}
+	if baseURL == "" {
+		baseURL = "https://api.deepseek.com"
+	}
+
+	modelName := os.Getenv("DEEPSEEK_MODEL_NAME")
+	if modelName == "" {
+		modelName = os.Getenv("OPENAI_MODEL_NAME")
+	}
+	if modelName == "" {
+		modelName = "deepseek-chat"
+	}
+
 	key := os.Getenv("DEEPSEEK_API_KEY")
 	if key == "" {
 		key = os.Getenv("OPENAI_API_KEY")
 	}
 
 	llm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
-		BaseURL: "https://api.deepseek.com",
-		Model:   "deepseek-chat",
+		BaseURL: baseURL,
+		Model:   modelName,
 		APIKey:  key,
 	})
 	if err != nil {

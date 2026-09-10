@@ -3,7 +3,20 @@ package aihelper
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
+)
+
+// 模型类型常量（会话创建时确定，创建后不可更改）
+const (
+	ModelTypeDeepSeek = "1"
+	ModelTypeRAG      = "2"
+	ModelTypeMCP      = "3"
+	ModelTypeOllama   = "4"
+	ModelTypeReAct    = "5"
+
+	// DefaultModelType 历史会话（未记录模型类型）的兜底模型
+	DefaultModelType = ModelTypeRAG
 )
 
 // ModelCreator 定义模型创建函数类型（需要 context）
@@ -57,11 +70,18 @@ func (f *AIModelFactory) registerCreators() {
 	f.creators["4"] = func(ctx context.Context, config map[string]interface{}) (AIModel, error) {
 		baseURL, _ := config["baseURL"].(string)
 		if baseURL == "" {
+			baseURL = os.Getenv("OLLAMA_BASE_URL")
+		}
+		if baseURL == "" {
 			baseURL = "http://localhost:11434"
 		}
-		modelName, ok := config["modelName"].(string)
-		if !ok {
-			return nil, fmt.Errorf("Ollama model requires modelName")
+		// 允许前端通过 config 指定，否则读环境变量，最后给一个默认本地模型
+		modelName, _ := config["modelName"].(string)
+		if modelName == "" {
+			modelName = os.Getenv("OLLAMA_MODEL_NAME")
+		}
+		if modelName == "" {
+			modelName = "qwen2.5:7b"
 		}
 		return NewOllamaModel(ctx, baseURL, modelName)
 	}
@@ -81,6 +101,17 @@ func (f *AIModelFactory) CreateAIModel(ctx context.Context, modelType string, co
 		return nil, fmt.Errorf("unsupported model type: %s", modelType)
 	}
 	return creator(ctx, config)
+}
+
+// HasModelType 判断是否为已注册的模型类型
+func (f *AIModelFactory) HasModelType(modelType string) bool {
+	_, ok := f.creators[modelType]
+	return ok
+}
+
+// IsValidModelType 全局校验模型类型（供 service 层做参数校验）
+func IsValidModelType(modelType string) bool {
+	return GetGlobalFactory().HasModelType(modelType)
 }
 
 // CreateAIHelper 一键创建 AIHelper
