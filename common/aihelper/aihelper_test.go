@@ -2,6 +2,7 @@ package aihelper
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,9 +12,10 @@ import (
 	"sync"
 	"testing"
 
-	"deeptalk/model"
+	"deeptalk/config"
 
 	"github.com/cloudwego/eino/schema"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // TestMain 指定示例配置文件的绝对路径：
@@ -25,6 +27,8 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
+
+// ==================== 测试替身 ====================
 
 // stubModel 用于隔离网络的最小 AIModel 实现
 type stubModel struct {
@@ -69,6 +73,8 @@ func newTestOpenAIModel(t *testing.T) AIModel {
 	}
 	return m
 }
+
+// ==================== AIHelper 并发与记忆 ====================
 
 // AddMessage 必须并发安全：并发写入不能丢消息（配合 -race 使用）
 func TestAddMessageConcurrentSafe(t *testing.T) {
@@ -177,34 +183,7 @@ func TestCompressFailureKeepsHistory(t *testing.T) {
 	}
 }
 
-// RAG 相关性过滤必须兼容 Redis 返回的字符串 distance
-func TestFilterByRelevanceWithStringDistance(t *testing.T) {
-	rag := &AliRAGModel{}
-	docs := []*schema.Document{
-		{ID: "a", Content: "最相关", MetaData: map[string]any{"distance": "0.10"}},
-		{ID: "b", Content: "一般相关", MetaData: map[string]any{"distance": "0.35"}},
-		{ID: "c", Content: "不相关", MetaData: map[string]any{"distance": "0.90"}},
-		{ID: "d", Content: "没有距离字段", MetaData: map[string]any{}},
-	}
-
-	got := rag.filterByRelevance(docs)
-	if len(got) != 3 {
-		ids := make([]string, 0, len(got))
-		for _, d := range got {
-			ids = append(ids, d.ID)
-		}
-		t.Fatalf("string distance not handled, kept=%v, want [a b d]", ids)
-	}
-
-	// float64（部分实现会预先解析）同样要支持
-	docsFloat := []*schema.Document{
-		{ID: "a", MetaData: map[string]any{"distance": 0.1}},
-		{ID: "c", MetaData: map[string]any{"distance": 0.9}},
-	}
-	if got := rag.filterByRelevance(docsFloat); len(got) != 1 || got[0].ID != "a" {
-		t.Fatalf("float distance filter wrong: %+v", got)
-	}
-}
+// ==================== 模型类型与会话绑定 ====================
 
 // 会话模型绑定：AIHelper 必须记住创建时的模型类型
 func TestAIHelperReportsBoundModelType(t *testing.T) {
@@ -238,7 +217,184 @@ func TestMessagesKeepIsUserFlag(t *testing.T) {
 	if len(msgs) != 2 || !msgs[0].IsUser || msgs[1].IsUser {
 		t.Fatalf("IsUser flag not preserved: %+v", msgs)
 	}
+}
 
-	// 压缩摘要存的是 model.Message，不参与角色推断
-	_ = model.Message{}
+// ==================== RAG 相关性过滤 ====================
+
+// RAG 相关性过滤必须兼容 Redis 返回的字符串 distance
+func TestFilterByRelevanceWithStringDistance(t *testing.T) {
+	rag := &AliRAGModel{}
+	docs := []*schema.Document{
+		{ID: "a", Content: "最相关", MetaData: map[string]any{"distance": "0.10"}},
+		{ID: "b", Content: "一般相关", MetaData: map[string]any{"distance": "0.35"}},
+		{ID: "c", Content: "不相关", MetaData: map[string]any{"distance": "0.90"}},
+		{ID: "d", Content: "没有距离字段", MetaData: map[string]any{}},
+	}
+
+	got := rag.filterByRelevance(docs)
+	if len(got) != 3 {
+		ids := make([]string, 0, len(got))
+		for _, d := range got {
+			ids = append(ids, d.ID)
+		}
+		t.Fatalf("string distance not handled, kept=%v, want [a b d]", ids)
+	}
+
+	// float64（部分实现会预先解析）同样要支持
+	docsFloat := []*schema.Document{
+		{ID: "a", MetaData: map[string]any{"distance": 0.1}},
+		{ID: "c", MetaData: map[string]any{"distance": 0.9}},
+	}
+	if got := rag.filterByRelevance(docsFloat); len(got) != 1 || got[0].ID != "a" {
+		t.Fatalf("float distance filter wrong: %+v", got)
+	}
+}
+
+// ==================== 语义缓存 ====================
+
+func TestCosine(t *testing.T) {
+	a := []float64{1, 0, 0}
+	b := []float64{1, 0, 0}
+	if got := cosine(a, b); math.Abs(got-1) > 1e-9 {
+		t.Errorf("相同向量相似度应为 1，实际 %v", got)
+	}
+
+	c := []float64{0, 1, 0}
+	if got := cosine(a, c); math.Abs(got) > 1e-9 {
+		t.Errorf("正交向量相似度应为 0，实际 %v", got)
+	}
+
+	d := []float64{-1, 0, 0}
+	if got := cosine(a, d); math.Abs(got+1) > 1e-9 {
+		t.Errorf("相反向量相似度应为 -1，实际 %v", got)
+	}
+
+	// 维度不一致 / 空向量不能 panic
+	if got := cosine(a, []float64{1, 2}); got != -1 {
+		t.Errorf("维度不一致应返回 -1，实际 %v", got)
+	}
+	if got := cosine([]float64{}, []float64{}); got != -1 {
+		t.Errorf("空向量应返回 -1，实际 %v", got)
+	}
+}
+
+// ==================== MCP 工具（原生 function calling） ====================
+
+// mcpToolForTest 构造一个和真实 MCP 天气工具同构的 Tool
+func mcpToolForTest() mcp.Tool {
+	return mcp.Tool{
+		Name:        "get_weather",
+		Description: "获取指定城市的天气信息",
+		InputSchema: mcp.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"city": map[string]interface{}{
+					"type":        "string",
+					"description": "城市名称，如 Beijing、上海",
+				},
+			},
+			Required: []string{"city"},
+		},
+	}
+}
+
+// MCP 的 JSON Schema 要能转成 eino 的 ToolInfo（原生 function calling 的基础）
+func TestToolInfoFromMCP(t *testing.T) {
+	tool := mcpToolForTest()
+	info := toolInfoFromMCP("weather__get_weather", tool)
+
+	if info.Name != "weather__get_weather" {
+		t.Errorf("name = %s", info.Name)
+	}
+	if info.Desc == "" {
+		t.Error("desc 不应为空")
+	}
+	params := info.ParamsOneOf
+	if params == nil {
+		t.Fatal("ParamsOneOf 不应为空")
+	}
+	got, err := params.ToJSONSchema()
+	if err != nil {
+		t.Fatalf("ToJSONSchema: %v", err)
+	}
+	if got == nil || got.Properties == nil || got.Properties.Len() == 0 {
+		t.Fatalf("参数 schema 未生成: %+v", got)
+	}
+	if _, ok := got.Properties.Get("city"); !ok {
+		t.Errorf("缺少 city 参数")
+	}
+	if len(got.Required) != 1 || got.Required[0] != "city" {
+		t.Errorf("required 解析异常: %v", got.Required)
+	}
+}
+
+// ==================== 模型连接配置解析 ====================
+
+// deepSeekSettings 的优先级：config.toml > 环境变量 > 默认值
+// 示例配置里 [deepSeekConfig] 是空的，所以这里主要验证"环境变量 > 默认值"这一段
+func TestDeepSeekSettingsPrecedence(t *testing.T) {
+	// 确保配置已加载（TestMain 已指定示例配置文件）
+	cfg := config.GetConfig()
+
+	// 用例 1：只设 DEEPSEEK_*，应被采用
+	t.Setenv("DEEPSEEK_API_KEY", "env-deepseek-key")
+	t.Setenv("DEEPSEEK_MODEL_NAME", "env-model")
+	t.Setenv("DEEPSEEK_BASE_URL", "http://env.example.com")
+	t.Setenv("OPENAI_API_KEY", "env-openai-key")
+
+	cfg.DeepSeekConfig.APIKey = ""
+	cfg.DeepSeekConfig.ModelName = ""
+	cfg.DeepSeekConfig.BaseURL = ""
+
+	baseURL, modelName, key := deepSeekSettings()
+	if key != "env-deepseek-key" || modelName != "env-model" || baseURL != "http://env.example.com" {
+		t.Errorf("环境变量未生效: base=%s model=%s key=%s", baseURL, modelName, key)
+	}
+
+	// 用例 2：DEEPSEEK_* 缺失时退回 OPENAI_* 与默认值
+	os.Unsetenv("DEEPSEEK_API_KEY")
+	os.Unsetenv("DEEPSEEK_MODEL_NAME")
+	os.Unsetenv("DEEPSEEK_BASE_URL")
+
+	baseURL, modelName, key = deepSeekSettings()
+	if key != "env-openai-key" {
+		t.Errorf("应退回 OPENAI_API_KEY，实际 %s", key)
+	}
+	if modelName != "deepseek-chat" {
+		t.Errorf("模型名应退回默认 deepseek-chat，实际 %s", modelName)
+	}
+	if baseURL != "https://api.deepseek.com" {
+		t.Errorf("baseURL 应退回默认 api.deepseek.com，实际 %s", baseURL)
+	}
+
+	// 用例 3：配置文件里填了就以配置文件为准（优先级最高）
+	cfg.DeepSeekConfig.APIKey = "config-key"
+	cfg.DeepSeekConfig.ModelName = "config-model"
+	cfg.DeepSeekConfig.BaseURL = "http://config.example.com"
+	t.Cleanup(func() {
+		cfg.DeepSeekConfig.APIKey = ""
+		cfg.DeepSeekConfig.ModelName = ""
+		cfg.DeepSeekConfig.BaseURL = ""
+	})
+
+	baseURL, modelName, key = deepSeekSettings()
+	if key != "config-key" || modelName != "config-model" || baseURL != "http://config.example.com" {
+		t.Errorf("配置文件优先级最高，实际 base=%s model=%s key=%s", baseURL, modelName, key)
+	}
+}
+
+// 示例配置里必须留出 [deepSeekConfig] 段，便于使用者集中填写
+func TestDeepSeekConfigSectionExists(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
+	data, err := os.ReadFile(filepath.Join(root, "config", "config.toml.example"))
+	if err != nil {
+		t.Fatalf("read example config: %v", err)
+	}
+	if !strings.Contains(string(data), "[deepSeekConfig]") {
+		t.Error("config.toml.example 缺少 [deepSeekConfig] 段")
+	}
 }

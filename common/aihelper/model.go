@@ -487,8 +487,19 @@ func (o *AliRAGModel) loadFullDocument() (string, error) {
 }
 
 // filterByRelevance 按相似度阈值过滤检索结果
+// 阈值与兜底条数都可配置：语料/embedding 模型不同，最优阈值不同。
 func (o *AliRAGModel) filterByRelevance(docs []*schema.Document) []*schema.Document {
-	const maxDistance = 0.5
+	cfg := config.GetConfig().RagModelConfig
+
+	maxDistance := cfg.RagMaxDistance
+	if maxDistance <= 0 {
+		maxDistance = 0.5
+	}
+	fallbackTopN := cfg.RagFallbackTopN
+	if fallbackTopN <= 0 {
+		fallbackTopN = 3
+	}
+
 	filtered := make([]*schema.Document, 0, len(docs))
 	for _, doc := range docs {
 		dist, ok := parseDistance(doc.MetaData["distance"])
@@ -501,8 +512,15 @@ func (o *AliRAGModel) filterByRelevance(docs []*schema.Document) []*schema.Docum
 			filtered = append(filtered, doc)
 		}
 	}
+
+	// 全都没过阈值时，至少保留最相关的 N 条（检索结果本身已按距离升序）
 	if len(filtered) == 0 && len(docs) > 0 {
-		return docs[:1]
+		n := fallbackTopN
+		if n > len(docs) {
+			n = len(docs)
+		}
+		log.Printf("[RAG] 所有分片都超过距离阈值 %.2f，兜底保留最相关 %d 条", maxDistance, n)
+		return docs[:n]
 	}
 	return filtered
 }

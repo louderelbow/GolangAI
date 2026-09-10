@@ -306,11 +306,22 @@ func (r *RAGQuery) keywordSearch(ctx context.Context, query string) []*schema.Do
 
 	// 解析 FT.SEARCH 返回：[total, key1, [field1, val1, ...], key2, ...]
 	arr, ok := raw.([]interface{})
-	if !ok || len(arr) < 2 {
-		log.Printf("[RAG] keyword search: 0 results or unexpected format, raw=%v", raw)
+	if !ok {
+		log.Printf("[RAG] keyword search: 返回格式异常, raw=%v", raw)
 		return nil
 	}
-	total := int(arr[0].(int64))
+	if len(arr) == 0 {
+		return nil
+	}
+	total := 0
+	if t, ok := arr[0].(int64); ok {
+		total = int(t)
+	}
+	if total == 0 || len(arr) < 2 {
+		// 没有命中是正常结果，不是错误
+		log.Printf("[RAG] keyword search: no hits")
+		return nil
+	}
 	log.Printf("[RAG] keyword search hit %d docs for query: %s", total, query)
 
 	docs := make([]*schema.Document, 0)

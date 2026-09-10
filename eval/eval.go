@@ -173,8 +173,11 @@ func ratio(sum, n float64) float64 {
 	return sum / n
 }
 
-func runCase(ctx context.Context, c Case, opts Options) CaseResult {
-	res := CaseResult{ID: c.ID, Question: c.Question, Expected: len(c.ExpectPoints)}
+// runCase 跑一条用例。
+// 注意用「具名返回值」：延迟是在 defer 里写入的，如果直接 `return res`，
+// 返回值会先被复制、defer 的赋值就丢了（之前延迟恒为 0 就是这个原因）。
+func runCase(ctx context.Context, c Case, opts Options) (res CaseResult) {
+	res = CaseResult{ID: c.ID, Question: c.Question, Expected: len(c.ExpectPoints)}
 	modelType := c.ModelType
 	if modelType == "" {
 		modelType = opts.ModelType
@@ -227,9 +230,17 @@ func runCase(ctx context.Context, c Case, opts Options) CaseResult {
 		return res
 	}
 
-	prompt := rag.BuildRAGPrompt(c.Question, docs)
+	// RAG / MCP 这两类模型**自己会做检索**（内部就是"检索 + RAG 提示词"），
+	// 所以只把原始问题交给它们；否则会把我们拼好的 RAG 提示词再套一层，
+	// 变成"拿整个提示词去检索"，既浪费又会污染评测结果。
+	var prompt string
+	if modelType == aihelper.ModelTypeRAG || modelType == aihelper.ModelTypeMCP {
+		prompt = c.Question
+	} else {
+		prompt = rag.BuildRAGPrompt(c.Question, docs)
+	}
 
-	resp, err := model.GenerateResponse(ctx, buildMessages(c.Question, prompt))
+	resp, err := model.GenerateResponse(ctx, buildMessages(prompt))
 	if err != nil {
 		res.Error = "generate failed: " + err.Error()
 		return res
@@ -256,8 +267,8 @@ func runCase(ctx context.Context, c Case, opts Options) CaseResult {
 	return res
 }
 
-// buildMessages 组装评测用的消息：system 提示 + RAG 提示词
-func buildMessages(question, prompt string) []*schema.Message {
+// buildMessages 组装评测用的消息：system 提示 + 提问
+func buildMessages(prompt string) []*schema.Message {
 	cfg := config.GetConfig()
 	msgs := make([]*schema.Message, 0, 3)
 	if cfg.AiPromptConfig.SystemPrompt != "" {
@@ -265,7 +276,6 @@ func buildMessages(question, prompt string) []*schema.Message {
 	}
 	msgs = append(msgs, &schema.Message{Role: schema.System, Content: "当前时间：" + time.Now().Format("2006-01-02 15:04:05")})
 	msgs = append(msgs, &schema.Message{Role: schema.User, Content: prompt})
-	_ = question
 	return msgs
 }
 

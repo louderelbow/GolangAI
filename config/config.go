@@ -57,6 +57,12 @@ type RagModelConfig struct {
 	RagDimension      int    `toml:"dimension"`
 	RagApiKey         string `toml:"apiKey"`
 	MaxContextTokens  int    `toml:"maxContextTokens"`
+
+	// MaxDistance 相关性阈值（余弦距离，越小越相关）。默认 0.5；文档短、语料口语化时可放宽到 0.7
+	RagMaxDistance float64 `toml:"maxDistance"`
+	// FallbackTopN 当所有分片都没过阈值时，至少保留几个最相关的分片（默认 3）
+	// 以前这里硬编码为 1，会把召回率压到最低
+	RagFallbackTopN int `toml:"fallbackTopN"`
 }
 
 type VoiceServiceConfig struct {
@@ -64,20 +70,6 @@ type VoiceServiceConfig struct {
 	VoiceServiceSecretKey string `toml:"voiceServiceSecretKey"`
 }
 
-// DeepSeekConfig 大模型（OpenAI 兼容协议）连接配置
-// 取值优先级：这里填了就用这里的 > 环境变量 > 代码默认值
-//   DEEPSEEK_BASE_URL / OPENAI_BASE_URL    默认 https://api.deepseek.com
-//   DEEPSEEK_MODEL_NAME / OPENAI_MODEL_NAME 默认 deepseek-chat
-//   DEEPSEEK_API_KEY / OPENAI_API_KEY      默认空
-// 这样既能集中写在配置文件里，也兼容"只设环境变量"的部署方式。
-type DeepSeekConfig struct {
-	BaseURL   string `toml:"baseUrl"`
-	ModelName string `toml:"modelName"`
-	APIKey    string `toml:"apiKey"`
-}
-
-// AiPricingConfig 模型计费（单位：元 / 100 万 token）
-// 用于把每个请求的 token 换算成费用并累计，不配置则费用按 0 计（token 仍然统计）
 type AiPricingConfig struct {
 	DefaultPromptPrice     float64            `toml:"defaultPromptPrice"`
 	DefaultCompletionPrice float64            `toml:"defaultCompletionPrice"`
@@ -133,7 +125,6 @@ type Config struct {
 	VoiceServiceConfig `toml:"voiceServiceConfig"`
 	AiPricingConfig    `toml:"aiPricing"`
 	AiPromptConfig     `toml:"aiPrompt"`
-	DeepSeekConfig     `toml:"deepSeekConfig"`
 	SemanticCache      SemanticCacheConfig `toml:"semanticCache"`
 	McpConfig          `toml:"mcpConfig"`
 }

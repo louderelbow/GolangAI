@@ -300,6 +300,31 @@ func SetGauge(name string, labels Labels, value float64) {
 	defaultRegistry.SetGauge(name, labels, value)
 }
 
+// EnsureHistogram 预创建直方图序列（不记录观测值）
+// 让 /metrics 在没有流量时也能看到完整分桶，而不是只有 HELP/TYPE 空壳
+func EnsureHistogram(name string, labels Labels) {
+	defaultRegistry.EnsureHistogram(name, labels)
+}
+
+// EnsureHistogram 预创建直方图序列（count/sum 均为 0，语义正确）
+func (r *Registry) EnsureHistogram(name string, labels Labels) {
+	key := seriesKey(name, renderLabels(labels))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.histograms[key]; ok {
+		return
+	}
+	r.histograms[key] = &histogram{
+		name:    name,
+		labels:  renderLabels(labels),
+		buckets: defaultBuckets,
+		counts:  make([]float64, len(defaultBuckets)),
+	}
+	if _, exists := r.typ[name]; !exists {
+		r.typ[name] = "histogram"
+	}
+}
+
 // Count 计数器累加（包级便捷函数）
 func Count(name string, labels Labels, delta float64) {
 	defaultRegistry.Count(name, labels, delta)
@@ -333,4 +358,6 @@ func RegisterHelp() {
 	r.SetGauge(MetricActiveSession, nil, 0)
 	r.Count(MetricAIRequests, Labels{"model": "", "model_type": "", "status": "none", "source": "none"}, 0)
 	r.Count(MetricAICacheHits, Labels{"result": "none"}, 0)
+	// 直方图也要预置分桶，否则无流量时只有 HELP/TYPE、看不到 _bucket/_sum/_count
+	r.EnsureHistogram(MetricAIDuration, Labels{"model": "", "source": "none"})
 }

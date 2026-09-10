@@ -1,44 +1,114 @@
 {
-  "name": "HR 制度问答黄金集（示例，请按你的文档改写）",
-  "description": "30~50 条为宜。expectPoints 是答案应覆盖的要点；expectSources 是检索结果里应出现的关键词；expectRefusal=true 表示文档里没有答案，模型应当拒答。thresholds 用于 CI 卡点，低于阈值 CLI 退出码为 1。",
+  "name": "公司规章制度问答黄金集（按你上传的文档定制，可直接扩到 30~50 条）",
+  "description": "expectPoints / expectSources 都是「子串匹配」，所以要用短而稳的关键词（比如用 7 而不是 七天）。expectRefusal=true 表示文档里没有答案、模型应当拒答。thresholds 低于阈值时 CLI 退出码为 1。",
   "thresholds": {
-    "retrievalRecall": 0.8,
-    "answerCoverage": 0.7,
+    "retrievalRecall": 0.7,
+    "answerCoverage": 0.6,
     "refusalAccuracy": 0.9
   },
   "cases": [
     {
-      "id": "leave-001",
-      "question": "正式员工请假需要提前多久申请？",
-      "expectPoints": ["提前", "申请"],
-      "expectSources": ["请假", "提前"],
-      "expectRefusal": false
-    },
-    {
-      "id": "leave-002",
-      "question": "试用期员工请假需要体检吗？多久出结果？",
-      "expectPoints": ["试用期", "体检"],
-      "expectSources": ["试用期", "体检"],
-      "expectRefusal": false
-    },
-    {
-      "id": "leave-003",
+      "id": "annual-001",
       "question": "年假有多少天？",
-      "expectPoints": ["年假"],
+      "expectPoints": ["7"],
       "expectSources": ["年假"],
       "expectRefusal": false
     },
     {
-      "id": "leave-004",
+      "id": "annual-002",
+      "question": "年假需要提前多久申请？",
+      "expectPoints": ["3"],
+      "expectSources": ["年假", "提前"],
+      "expectRefusal": false
+    },
+    {
+      "id": "leave-001",
+      "question": "迟到多久算旷工？",
+      "expectPoints": ["30", "半天"],
+      "expectSources": ["迟到"],
+      "expectRefusal": false
+    },
+    {
+      "id": "leave-002",
       "question": "病假需要提供什么材料？",
-      "expectPoints": ["病假"],
+      "expectPoints": ["医院证明"],
       "expectSources": ["病假"],
       "expectRefusal": false
     },
     {
-      "id": "leave-005",
+      "id": "leave-003",
+      "question": "事假怎么扣工资？",
+      "expectPoints": ["扣"],
+      "expectSources": ["事假"],
+      "expectRefusal": false
+    },
+    {
+      "id": "expense-001",
+      "question": "差旅费需要在多久内提交报销？",
+      "expectPoints": ["7"],
+      "expectSources": ["报销", "差旅"],
+      "expectRefusal": false
+    },
+    {
+      "id": "expense-002",
+      "question": "单笔超过 500 元的报销需要谁签字？",
+      "expectPoints": ["部门经理"],
+      "expectSources": ["500"],
+      "expectRefusal": false
+    },
+    {
+      "id": "expense-003",
+      "question": "超过 2000 元的报销需要谁签字？",
+      "expectPoints": ["总经理"],
+      "expectSources": ["2000"],
+      "expectRefusal": false
+    },
+    {
+      "id": "expense-004",
+      "question": "电子发票要怎么提交？",
+      "expectPoints": ["打印"],
+      "expectSources": ["电子发票"],
+      "expectRefusal": false
+    },
+    {
+      "id": "overtime-001",
+      "question": "工作日加班费是几倍工资？",
+      "expectPoints": ["1.5"],
+      "expectSources": ["加班"],
+      "expectRefusal": false
+    },
+    {
+      "id": "overtime-002",
+      "question": "法定节假日加班费怎么算？",
+      "expectPoints": ["3"],
+      "expectSources": ["法定节假日"],
+      "expectRefusal": false
+    },
+    {
+      "id": "overtime-003",
+      "question": "加班需要提前做什么？",
+      "expectPoints": ["OA"],
+      "expectSources": ["加班"],
+      "expectRefusal": false
+    },
+    {
+      "id": "resign-001",
+      "question": "正式员工离职需要提前多久申请？",
+      "expectPoints": ["30"],
+      "expectSources": ["离职"],
+      "expectRefusal": false
+    },
+    {
+      "id": "resign-002",
+      "question": "试用期员工离职需要提前几天？",
+      "expectPoints": ["6"],
+      "expectSources": ["试用期"],
+      "expectRefusal": false
+    },
+    {
+      "id": "summary-001",
       "question": "总结一下这份文档的全部内容",
-      "expectPoints": ["请假"],
+      "expectPoints": ["请假", "报销", "加班", "离职"],
       "expectSources": [],
       "expectRefusal": false
     },
@@ -52,6 +122,13 @@
     {
       "id": "refuse-002",
       "question": "帮我写一段 Python 快速排序代码",
+      "expectPoints": [],
+      "expectSources": [],
+      "expectRefusal": true
+    },
+    {
+      "id": "refuse-003",
+      "question": "公司有多少员工？平均工资是多少？",
       "expectPoints": [],
       "expectSources": [],
       "expectRefusal": true

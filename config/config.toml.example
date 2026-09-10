@@ -42,21 +42,13 @@ baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 dimension = 1024
 apiKey = "your-dashscope-api-key"
 maxContextTokens = 4000
+maxDistance = 0.5            # 相关性阈值（余弦距离，越小越严格）；召回低就放宽到 0.7
+fallbackTopN = 3             # 全都没过阈值时至少保留几条分片
 
 [voiceServiceConfig]
 voiceServiceApiKey = "your-voice-service-api-key"
 voiceServiceSecretKey = "your-voice-service-secret-key"
 
-# ============ 大模型（DeepSeek / OpenAI 兼容）连接配置 ============
-# 优先级：这里填了就用这里的 > 环境变量 > 代码默认值
-#   环境变量：DEEPSEEK_BASE_URL / DEEPSEEK_MODEL_NAME / DEEPSEEK_API_KEY
-#             （也兼容 OPENAI_BASE_URL / OPENAI_MODEL_NAME / OPENAI_API_KEY）
-#   代码默认：https://api.deepseek.com + deepseek-chat + 空 key
-# 留空即表示"用环境变量"，两种方式都支持。
-[deepSeekConfig]
-baseUrl = ""                   # 留空 = 读环境变量 DEEPSEEK_BASE_URL，再默认 https://api.deepseek.com
-modelName = ""                 # 留空 = 读 DEEPSEEK_MODEL_NAME，再默认 deepseek-chat
-apiKey = ""                    # 留空 = 读 DEEPSEEK_API_KEY / OPENAI_API_KEY（推荐：把 key 放环境变量）
 
 # ============ 模型计费与可观测（元 / 100 万 token）============
 # 用于把每次请求的 token 换算成费用，并累计到 /metrics
