@@ -17,8 +17,8 @@ type (
 		Sessions []model.SessionInfo `json:"sessions,omitempty"`
 	}
 	CreateSessionAndSendMessageRequest struct {
-		UserQuestion string `json:"question" binding:"required"`  // 用户问题;
-		ModelType    string `json:"modelType" binding:"required"` // 模型类型;
+		UserQuestion string `json:"question" binding:"required,max=4000"`  // 用户问题;
+		ModelType    string `json:"modelType" binding:"required,max=8"`    // 模型类型;
 	}
 
 	CreateSessionAndSendMessageResponse struct {
@@ -29,10 +29,10 @@ type (
 	}
 
 	ChatSendRequest struct {
-		UserQuestion string `json:"question" binding:"required"` // 用户问题;
+		UserQuestion string `json:"question" binding:"required,max=4000"` // 用户问题;
 		// 已有会话的模型由会话绑定决定，这里的 modelType 仅在新建会话时生效，可为空
-		ModelType string `json:"modelType"`                 // 模型类型;
-		SessionID string `json:"sessionId" binding:"required"` // 当前会话ID
+		ModelType string `json:"modelType" binding:"omitempty,max=8"` // 模型类型;
+		SessionID string `json:"sessionId" binding:"required,max=64"` // 当前会话ID
 	}
 
 	ChatSendResponse struct {
@@ -41,7 +41,7 @@ type (
 	}
 
 	ChatHistoryRequest struct {
-		SessionID string `json:"sessionId,omitempty" binding:"required"` // 当前会话ID
+		SessionID string `json:"sessionId" binding:"required,max=64"` // 当前会话ID
 	}
 	ChatHistoryResponse struct {
 		History []model.History `json:"history"`

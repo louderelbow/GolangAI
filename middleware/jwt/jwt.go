@@ -31,7 +31,8 @@ func Auth() gin.HandlerFunc {
 			return
 		}
 
-		log.Println("token is ", token)
+		// 不要把完整 token 写进日志（日志会被收集/转发，等同于泄露凭据）
+		log.Printf("jwt auth: tokenLen=%d", len(token))
 		userName, ok := myjwt.ParseToken(token)
 		if !ok {
 			c.JSON(http.StatusOK, res.CodeOf(code.CodeInvalidToken))

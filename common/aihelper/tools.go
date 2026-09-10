@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,19 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	toolutils "github.com/cloudwego/eino/components/tool/utils"
 )
+
+// weatherClient 天气工具的外部调用必须带超时：
+// Agent 的 MaxStep 只有 5，但一个挂住的 HTTP 请求能让整轮对话永远不返回。
+var weatherClient = &http.Client{Timeout: 10 * time.Second}
+
+// mustTool 注册工具时校验错误：InferTool 失败会返回 nil，
+// 一旦把 nil 塞进 Agent，后续调用直接 panic。
+func mustTool(t tool.InvokableTool, err error, name string) tool.InvokableTool {
+	if err != nil || t == nil {
+		log.Printf("[tools] register tool %s failed: %v", name, err)
+	}
+	return t
+}
 
 // ====================== 计算器工具 ======================
 
@@ -28,7 +42,7 @@ type calculatorOutput struct {
 }
 
 func NewCalculatorTool() tool.InvokableTool {
-	t, _ := toolutils.InferTool[calculatorInput, calculatorOutput](
+	t, err := toolutils.InferTool[calculatorInput, calculatorOutput](
 		"calculator",
 		"计算数学表达式的结果，支持加减乘除和括号",
 		func(ctx context.Context, input calculatorInput) (calculatorOutput, error) {
@@ -42,7 +56,7 @@ func NewCalculatorTool() tool.InvokableTool {
 			}, nil
 		},
 	)
-	return t
+	return mustTool(t, err, "calculator")
 }
 
 func evalSimple(expr string) (float64, error) {
@@ -156,7 +170,7 @@ type datetimeOutput struct {
 }
 
 func NewDateTimeTool() tool.InvokableTool {
-	t, _ := toolutils.InferTool[datetimeInput, datetimeOutput](
+	t, err := toolutils.InferTool[datetimeInput, datetimeOutput](
 		"datetime",
 		"查询当前日期时间、星期和 Unix 时间戳",
 		func(ctx context.Context, input datetimeInput) (datetimeOutput, error) {
@@ -177,7 +191,7 @@ func NewDateTimeTool() tool.InvokableTool {
 			}, nil
 		},
 	)
-	return t
+	return mustTool(t, err, "datetime")
 }
 
 // ====================== 字数统计工具 ======================
@@ -192,7 +206,7 @@ type wordCountOutput struct {
 }
 
 func NewWordCountTool() tool.InvokableTool {
-	t, _ := toolutils.InferTool[wordCountInput, wordCountOutput](
+	t, err := toolutils.InferTool[wordCountInput, wordCountOutput](
 		"word_count",
 		"统计文本的字符数和字节数",
 		func(ctx context.Context, input wordCountInput) (wordCountOutput, error) {
@@ -204,7 +218,7 @@ func NewWordCountTool() tool.InvokableTool {
 			return result, nil
 		},
 	)
-	return t
+	return mustTool(t, err, "word_count")
 }
 
 // ====================== 天气工具 ======================
@@ -219,7 +233,7 @@ type weatherOutput struct {
 }
 
 func NewWeatherTool() tool.InvokableTool {
-	t, _ := toolutils.InferTool[weatherInput, weatherOutput](
+	t, err := toolutils.InferTool[weatherInput, weatherOutput](
 		"get_weather",
 		"查询指定城市的天气信息",
 		func(ctx context.Context, input weatherInput) (weatherOutput, error) {
@@ -227,24 +241,39 @@ func NewWeatherTool() tool.InvokableTool {
 			if city == "" {
 				return weatherOutput{City: city, Report: "请提供城市名称"}, nil
 			}
-			report, err := queryWeatherDirect(city)
+			report, err := queryWeatherDirect(ctx, city)
 			if err != nil {
 				return weatherOutput{City: city, Report: "天气查询失败: " + err.Error()}, nil
 			}
 			return weatherOutput{City: city, Report: report}, nil
 		},
 	)
-	return t
+	return mustTool(t, err, "get_weather")
 }
 
-func queryWeatherDirect(city string) (string, error) {
-	url := fmt.Sprintf("https://wttr.in/%s?format=%%l:+%%C+%%t+%%h+%%w&lang=zh", city)
-	resp, err := http.Get(url)
+// queryWeatherDirect 查询天气：必须带 ctx、超时、状态码检查与读取上限
+func queryWeatherDirect(ctx context.Context, city string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	url := fmt.Sprintf("https://wttr.in/%s?format=%%l:+%%C+%%t+%%h+%%w&lang=zh", url.PathEscape(city))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := weatherClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("weather api status %d", resp.StatusCode)
+	}
+
+	// 限制读取大小，避免第三方返回超大内容打爆内存
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
 		return "", err
 	}

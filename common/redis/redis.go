@@ -28,14 +28,52 @@ func Init() {
 		Password: password,
 		DB:       db,
 		Protocol: 2, // 使用 Protocol 2 避免 maint_notifications 警告
-	})
 
+		// 超时/重试必须收紧：go-redis 默认 MaxRetries=3、DialTimeout=5s，
+		// Redis 一旦不可用，每个请求都会白白多等 1~2 秒才降级，把整站延迟拖垮。
+		DialTimeout:  2 * time.Second,
+		ReadTimeout:  2 * time.Second,
+		WriteTimeout: 2 * time.Second,
+		PoolTimeout:  2 * time.Second,
+		MaxRetries:   0,
+	})
 }
 
 func SetCaptchaForEmail(email, captcha string) error {
 	key := GenerateCaptcha(email)
 	expire := 2 * time.Minute
 	return Rdb.Set(ctx, key, captcha, expire).Err()
+}
+
+// TryAcquire 一次性的 SET NX EX，用于"发送冷却"这类幂等控制
+// 返回 true 表示抢到了（本次允许执行）
+func TryAcquire(key string, ttl time.Duration) (bool, error) {
+	return Rdb.SetNX(ctx, key, "1", ttl).Result()
+}
+
+// QuotaIncr 每日 token 配额计数（多实例共享）
+// delta <= 0 表示只读取当前值
+func QuotaIncr(user, day string, delta int64) (int64, error) {
+	if Rdb == nil {
+		return 0, fmt.Errorf("redis not initialized")
+	}
+	key := fmt.Sprintf("ai:quota:%s:%s", user, day)
+
+	if delta <= 0 {
+		v, err := Rdb.Get(ctx, key).Int64()
+		if err == redisCli.Nil {
+			return 0, nil
+		}
+		return v, err
+	}
+
+	v, err := Rdb.IncrBy(ctx, key, delta).Result()
+	if err != nil {
+		return 0, err
+	}
+	// 两天过期：跨天自动重置，不需要定时任务
+	Rdb.Expire(ctx, key, 48*time.Hour)
+	return v, nil
 }
 
 func CheckCaptchaForEmail(email, userInput string) (bool, error) {

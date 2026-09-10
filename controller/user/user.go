@@ -30,7 +30,8 @@ type (
 	//注册成功之后，直接让其进行登录状态
 	RegisterResponse struct {
 		controller.Response
-		Token string `json:"token,omitempty"`
+		Token    string `json:"token,omitempty"`
+		Username string `json:"username,omitempty"` // 系统生成的账号（同时会发到邮箱）
 	}
 
 	CaptchaRequest struct {
@@ -72,7 +73,7 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	token, code_ := user.Register(req.Email, req.Password, req.Captcha)
+	token, username, code_ := user.Register(req.Email, req.Password, req.Captcha)
 	if code_ != code.CodeSuccess {
 		c.JSON(http.StatusOK, res.CodeOf(code_))
 		return
@@ -80,6 +81,7 @@ func Register(c *gin.Context) {
 
 	res.Success()
 	res.Token = token
+	res.Username = username
 	c.JSON(http.StatusOK, res)
 }
 

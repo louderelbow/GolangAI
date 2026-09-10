@@ -110,6 +110,16 @@ cp config/config.toml.example config/config.toml
 # 编辑 config.toml 填入你的 MySQL/Redis/RabbitMQ/API Key 配置
 ```
 
+### API Key 放在哪（两条线，别搞混）
+
+| 用途 | 读取位置 | 说明 |
+|------|----------|------|
+| **DeepSeek**（modelType 1 / 5 的对话模型） | `[deepSeekConfig]` → 环境变量 `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL_NAME` / `DEEPSEEK_API_KEY`（也兼容 `OPENAI_*`）→ 默认 `https://api.deepseek.com` + `deepseek-chat` | 配置留空即用环境变量；两者都支持 |
+| **阿里百炼**（modelType 2/3 的对话模型 + Embedding + 图片识别） | `[ragModelConfig] apiKey` → 环境变量 `ALIYUN_API_KEY` → `DEEPSEEK_API_KEY` → `OPENAI_API_KEY` | 建议只填 `ragModelConfig.apiKey` |
+
+> 结论：**DeepSeek 的 key 不在 config.toml 里也能跑**（默认读环境变量），
+> 想集中管理就往 `[deepSeekConfig] apiKey` 填；填了就以配置文件为准。
+
 ### 2. 初始化数据库
 
 ```bash
@@ -199,12 +209,99 @@ go run ./common/mcp -http-addr :8081
 # 后端默认连接 http://localhost:8081/mcp，可用 MCP_BASE_URL 覆盖
 ```
 
-## 限流说明
+## 成本、可观测与缓存
 
-所有 `/AI/chat/*` 接口受 Token Bucket 限流保护：
-- 每用户容量 10 次突发，每秒补充 2 次
+### /metrics（Prometheus 文本格式，零依赖）
+
+```
+deeptalk_ai_requests_total{model,model_type,status,source}   # 请求数（status=ok/error/quota_exceeded，source=llm/semantic_cache）
+deeptalk_ai_tokens_total{model,kind}                         # prompt / completion / cached(命中上游前缀缓存)
+deeptalk_ai_cost_micros_total{model}                         # 费用累计（微元，1 元 = 1e6）
+deeptalk_ai_request_duration_seconds{model,source}           # 延迟直方图
+deeptalk_ai_cache_total{result}                              # 语义缓存 hit/miss
+deeptalk_ai_active_sessions                                  # 内存中活跃会话数
+```
+
+每次请求还会打一条结构化日志：模型、用户、状态、prompt/completion/cached token、费用、延迟。
+
+### 计费配置（`[aiPricing]`）
+
+元 / 100 万 token。`promptPrice.<模型名>`、`completionPrice.<模型名>`，未配置走 `default*`。
+命中前缀缓存的输入 token 按 0.1 系数计费。`dailyTokenQuota > 0` 时按用户每日限流（Redis 计数，Redis 不可用退回进程内）。
+
+### Prompt 前缀缓存（省钱的关键）
+
+消息顺序被刻意设计为**稳定前缀在前、易变内容在后**：
+
+```
+[固定 systemPrompt] → [历史摘要] → [历史消息…] → [当前时间] → [本轮提问]
+```
+
+`当前时间` 每次都变，所以必须排在后面；以前它在第 0 位，等于每次请求都改写前缀，上游缓存命中率恒为 0。
+命中情况可以通过 `/metrics` 的 `kind="cached"` 直接看到。
+
+### 语义缓存（`[semanticCache]`）
+
+相似问题直接返回缓存答案，省一次 LLM 调用。
+**只对"会话首轮提问"生效**——有历史上下文时同一问题的正确答案会不同，缓存会答错，这是刻意加的安全边界。
+embedding 不可用时自动跳过（fail-open），不影响正常问答。
+
+### 评测体系（黄金集）
+
+```bash
+go run ./cmd/eval -set eval/golden_example.json -user <你的账号> [-type 2] [-judge] [-v]
+```
+
+指标：**检索召回率**（`expectSources` 是否出现在检索结果里）、**要点覆盖率**（`expectPoints` 是否被答案覆盖）、**拒答准确率**（该拒答的有没有拒答）、**忠实度**（`-judge` 时用 LLM 打分）、平均延迟。
+黄金集里的 `thresholds` 低于阈值时 CLI **退出码为 1**，可直接作为 CI / 发布前卡点。
+
+## MCP 工具（给 AI 加能力，不用自己写）
+
+`[mcpConfig.servers]` 声明工具来源，工具由**模型原生 function calling** 调用（不再依赖提示词里"让模型吐 JSON"）：
+
+```toml
+[[mcpConfig.servers]]
+name = "weather"
+url  = "http://localhost:8081/mcp"
+allowedTools = ["get_weather"]     # 白名单，空数组 = 该服务端全部工具
+
+maxStep = 5                        # Agent 最大推理步数
+```
+
+- 启动时自动 `tools/list` 拉取工具清单，按白名单过滤后包装成 eino 工具
+- 多服务端时工具名自动加 `<server>__` 前缀避免重名
+- 某个服务端连不上只跳过它，不影响其它工具与普通对话；一个工具都没有时退化为普通聊天
+- 本项目自带的天气 MCP 服务：`go run ./common/mcp -http-addr :8081`
+
+
+
+- **已登录接口**（`/AI/chat/*`）：Token Bucket，每用户容量 10 次突发、每秒补充 2 次
+- **未登录接口**（`/user/register`、`/user/login`、`/user/captcha`）：按 **IP** 限流，容量 5 次、每 5 秒补 1 次（防刷验证码/暴力破解）
 - 超限返回 HTTP 429 `{"status_code":4002,"status_msg":"请求过于频繁，请稍后再试"}`
-- Redis 不可用时自动降级本地 sync.Map 限流
+- **Redis 不可用时降级本地内存限流**（仍有限流效果，而不是放行）；Redis 报错后会熔断 5 秒，避免每个请求都去等连接超时
+
+## 请求限制（生产注意）
+
+| 位置 | 限制 |
+|------|------|
+| `/user/*` 请求体 | 16KB |
+| `/AI/*` 请求体 | 64KB |
+| 问题长度 | ≤ 4000 字（`question`） |
+| TTS 文本 | ≤ 1000 字（超过百度 60 字/次上限时自动分片合成后拼接） |
+| 图片识别 | ≤ 8MB（超出返回参数错误） |
+| 文档上传 | ≤ 10MB（仅 `.md` / `.txt`） |
+| 验证码 | 同一邮箱 60 秒冷却，Redis 中 2 分钟有效 |
+| 会话列表 | 最多返回 200 条，按创建时间倒序 |
+
+## 运行期行为（排障时看这几条）
+
+| 行为 | 说明 |
+|------|------|
+| 会话历史懒加载 | 会话首次进入内存时才从数据库读自己的历史；空闲 30 分钟的会话会被自动释放（日志 `evicted N idle sessions`） |
+| RabbitMQ 降级 | MQ 不可用/投递失败时**同步写库**（消息不丢）；消费者自带指数退避重连；毒消息重投一次后丢弃并告警，不再无限 requeue |
+| 优雅停机 | 收到 Ctrl+C / SIGTERM 后停止接收新请求，等待在途请求（含 SSE 流式回答）最多 15 秒再退出 |
+| 流式取消 | 客户端断开时取消上游模型调用，不再继续消耗 token |
+| 日志脱敏 | 不再打印完整 JWT 与完整模型输出，只记录长度/摘要 |
 
 ## License
 

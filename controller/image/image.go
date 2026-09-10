@@ -26,10 +26,10 @@ func RecognizeImage(c *gin.Context) {
 		return
 	}
 
-	className, err := image.RecognizeImage(file)
+	className, err := image.RecognizeImage(c.Request.Context(), file)
 	if err != nil {
 		log.Println("RecognizeImage fail ", err)
-		c.JSON(http.StatusOK, res.CodeOf(code.CodeServerBusy))
+		c.JSON(http.StatusOK, res.CodeOf(code.CodeInvalidParams))
 		return
 	}
 

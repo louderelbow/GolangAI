@@ -290,8 +290,15 @@ func (r *RAGQuery) keywordSearch(ctx context.Context, query string) []*schema.Do
 		return nil
 	}
 
+	// 用户输入不能直接拼进 RediSearch 查询串：其中的 - | @ ( ) { } [ ] " ' ~ * 等
+	// 都是查询语法字符，会让整条查询报语法错误，检索静默失效（退化成纯向量检索）
+	kwQuery := buildKeywordQuery(query)
+	if kwQuery == "" {
+		return nil
+	}
+
 	// FT.SEARCH idx query LANGUAGE chinese LIMIT 0 5
-	raw, err := r.rdb.Do(ctx, "FT.SEARCH", r.indexName, query, "LANGUAGE", "chinese", "LIMIT", "0", "5").Result()
+	raw, err := r.rdb.Do(ctx, "FT.SEARCH", r.indexName, kwQuery, "LANGUAGE", "chinese", "LIMIT", "0", "5").Result()
 	if err != nil {
 		log.Printf("[RAG] keyword search failed: %v", err)
 		return nil
@@ -334,6 +341,32 @@ func (r *RAGQuery) keywordSearch(ctx context.Context, query string) []*schema.Do
 		})
 	}
 	return docs
+}
+
+// buildKeywordQuery 把用户输入转成安全的 RediSearch 查询串
+// 策略：按空白/标点/语法字符切词，再用 | 组成 OR 查询；切不出词时返回空串
+func buildKeywordQuery(query string) string {
+	const maxTerms = 8
+	sep := " \t\r\n,，.。;；!！?？:：/\\\"'`()[]{}<>|@#$%^&*+=~-"
+	fields := strings.FieldsFunc(query, func(r rune) bool {
+		return strings.ContainsRune(sep, r)
+	})
+
+	terms := make([]string, 0, maxTerms)
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		terms = append(terms, f)
+		if len(terms) >= maxTerms {
+			break
+		}
+	}
+	if len(terms) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(terms, "|") + ")"
 }
 
 // rrf 融合向量和关键词两路排序结果

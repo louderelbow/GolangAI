@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -61,14 +62,19 @@ func (c *WeatherAPIClient) GetWeather(ctx context.Context, city string) (*Weathe
 		return nil, fmt.Errorf("create request failed: %w", err)
 	}
 
-	client := &http.Client{}
+	// 必须带超时：MCP 工具调用在对话链路里同步执行，卡住等于整轮对话卡住
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("weather api status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 128<<10))
 	if err != nil {
 		return nil, fmt.Errorf("read response failed: %w", err)
 	}

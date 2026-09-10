@@ -2,12 +2,14 @@ package image
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"deeptalk/config"
 )
@@ -15,13 +17,16 @@ import (
 // ======================== 阿里云 DashScope 视觉识别 ========================
 // 使用 config.toml 中 ragModelConfig 的 baseUrl + apiKey
 
+// httpClient 必须带超时：多模态接口偶发卡住时不能把 gin worker 一直占住
+var httpClient = &http.Client{Timeout: 60 * time.Second}
+
 type ImageRecognizer struct {
 	apiKey  string
 	baseURL string
 	model   string
 }
 
-func NewImageRecognizer(modelPath, labelPath string, inputH, inputW int) (*ImageRecognizer, error) {
+func NewImageRecognizer() (*ImageRecognizer, error) {
 	conf := config.GetConfig()
 	apiKey := conf.RagModelConfig.RagApiKey
 	if apiKey == "" {
@@ -49,12 +54,15 @@ func NewImageRecognizer(modelPath, labelPath string, inputH, inputW int) (*Image
 func (r *ImageRecognizer) Close() {}
 
 // PredictFromBuffer 从字节缓冲识别图像
-func (r *ImageRecognizer) PredictFromBuffer(buf []byte) (string, error) {
-	return r.callVisionAPI(buf)
+func (r *ImageRecognizer) PredictFromBuffer(ctx context.Context, buf []byte) (string, error) {
+	return r.callVisionAPI(ctx, buf)
 }
 
 // callVisionAPI 调用阿里云 DashScope 多模态 API
-func (r *ImageRecognizer) callVisionAPI(imageData []byte) (string, error) {
+func (r *ImageRecognizer) callVisionAPI(ctx context.Context, imageData []byte) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Base64 编码图片
 	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
 
@@ -87,14 +95,14 @@ func (r *ImageRecognizer) callVisionAPI(imageData []byte) (string, error) {
 	}
 
 	url := r.baseURL + "/chat/completions"
-	req, err := http.NewRequest("POST", url, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+r.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("api call failed: %w", err)
 	}

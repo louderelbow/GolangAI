@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -13,18 +16,36 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// stubModel 用于隔离网络的最小 AIModel 实现
-type stubModel struct{}
-
-func (s *stubModel) GenerateResponse(ctx context.Context, m []*schema.Message) (*schema.Message, error) {
-	return &schema.Message{Role: schema.Assistant, Content: "ok"}, nil
+// TestMain 指定示例配置文件的绝对路径：
+// 让配置相关代码在测试里也能走通（不依赖测试进程的工作目录）
+func TestMain(m *testing.M) {
+	if _, file, _, ok := runtime.Caller(0); ok {
+		root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
+		_ = os.Setenv("DEEPTALK_CONFIG", filepath.Join(root, "config", "config.toml.example"))
+	}
+	os.Exit(m.Run())
 }
 
-func (s *stubModel) StreamResponse(ctx context.Context, m []*schema.Message, cb StreamCallback) (string, error) {
-	return "ok", nil
+// stubModel 用于隔离网络的最小 AIModel 实现
+type stubModel struct {
+	usage *schema.TokenUsage
+}
+
+func (s *stubModel) GenerateResponse(ctx context.Context, m []*schema.Message) (*schema.Message, error) {
+	msg := &schema.Message{Role: schema.Assistant, Content: "ok"}
+	if s.usage != nil {
+		msg.ResponseMeta = &schema.ResponseMeta{Usage: s.usage}
+	}
+	return msg, nil
+}
+
+func (s *stubModel) StreamResponse(ctx context.Context, m []*schema.Message, cb StreamCallback) (string, *schema.TokenUsage, error) {
+	cb("ok")
+	return "ok", s.usage, nil
 }
 
 func (s *stubModel) GetModelType() string { return ModelTypeDeepSeek }
+func (s *stubModel) GetModelName() string { return "stub-model" }
 
 // newTestOpenAIModel 指向本地 httptest 的 OpenAI 兼容模型（避免真实网络调用）
 func newTestOpenAIModel(t *testing.T) AIModel {

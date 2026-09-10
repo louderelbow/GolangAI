@@ -10,6 +10,11 @@ func GenerateCaptcha(email string) string {
 	return fmt.Sprintf(config.DefaultRedisKeyConfig.CaptchaPrefix, email)
 }
 
+// key:特定邮箱-> 验证码发送冷却标记
+func GenerateCaptchaCooldown(email string) string {
+	return fmt.Sprintf(config.DefaultRedisKeyConfig.CaptchaCooldownPrefix, email)
+}
+
 func GenerateIndexName(filename string) string {
 	indexName := fmt.Sprintf(config.DefaultRedisKeyConfig.IndexName, filename)
 	return indexName

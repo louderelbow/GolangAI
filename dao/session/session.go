@@ -5,9 +5,16 @@ import (
 	"deeptalk/model"
 )
 
+// MaxSessionListSize 单次返回的会话列表上限（避免一次拉取过多数据）
+const MaxSessionListSize = 200
+
 func GetSessionsByUserName(UserName string) ([]model.Session, error) {
 	var sessions []model.Session
-	err := mysql.DB.Where("user_name = ?", UserName).Find(&sessions).Error
+	// 必须显式排序：不写 ORDER BY 时数据库返回顺序不保证，前端列表会"看起来随机"
+	err := mysql.DB.Where("user_name = ?", UserName).
+		Order("created_at desc").
+		Limit(MaxSessionListSize).
+		Find(&sessions).Error
 	return sessions, err
 }
 

@@ -148,6 +148,9 @@ export default {
       { value: '5', label: 'ReAct Agent' }
     ]
 
+    // 记住上次打开的会话：刷新页面后自动恢复，避免"记录看起来没了"
+    const LAST_SESSION_KEY = 'deeptalk:lastSessionId'
+
     const modelLabel = (value) => {
       const hit = MODEL_OPTIONS.find(o => o.value === String(value || ''))
       return hit ? hit.label : '未知模型'
@@ -257,6 +260,7 @@ export default {
       currentSessionId.value = 'temp'
       tempSession.value = true
       currentMessages.value = []
+      localStorage.removeItem(LAST_SESSION_KEY)
       nextTick(() => {
         if (messageInput.value) messageInput.value.focus()
       })
@@ -266,6 +270,7 @@ export default {
       if (!sessionId) return
       currentSessionId.value = String(sessionId)
       tempSession.value = false
+      localStorage.setItem(LAST_SESSION_KEY, currentSessionId.value)
 
       if (!sessions.value[sessionId].messages || sessions.value[sessionId].messages.length === 0) {
         try {
@@ -423,6 +428,7 @@ export default {
                   }
                   currentSessionId.value = newSid
                   tempSession.value = false
+                  localStorage.setItem(LAST_SESSION_KEY, newSid)
                 }
                 continue
               }
@@ -480,6 +486,7 @@ export default {
           }
           currentSessionId.value = sessionId
           tempSession.value = false
+          localStorage.setItem(LAST_SESSION_KEY, sessionId)
           currentMessages.value = [...sessions.value[sessionId].messages]
         } else {
           ElMessage.error(response.data?.status_msg || '发送失败')
@@ -540,7 +547,14 @@ export default {
       }
     }
 
-    onMounted(() => { loadSessions() })
+    onMounted(async () => {
+      await loadSessions()
+      // 刷新后自动恢复上次打开的会话（并拉取它的历史）
+      const last = localStorage.getItem(LAST_SESSION_KEY)
+      if (last && sessions.value[last]) {
+        await switchSession(last)
+      }
+    })
 
     return {
       sessions: computed(() => Object.values(sessions.value)),

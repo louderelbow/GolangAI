@@ -1,0 +1,67 @@
+{
+  "name": "HR 制度问答黄金集（示例，请按你的文档改写）",
+  "description": "30~50 条为宜。expectPoints 是答案应覆盖的要点；expectSources 是检索结果里应出现的关键词；expectRefusal=true 表示文档里没有答案，模型应当拒答。thresholds 用于 CI 卡点，低于阈值 CLI 退出码为 1。",
+  "thresholds": {
+    "retrievalRecall": 0.8,
+    "answerCoverage": 0.7,
+    "refusalAccuracy": 0.9
+  },
+  "cases": [
+    {
+      "id": "leave-001",
+      "question": "正式员工请假需要提前多久申请？",
+      "expectPoints": ["提前", "申请"],
+      "expectSources": ["请假", "提前"],
+      "expectRefusal": false
+    },
+    {
+      "id": "leave-002",
+      "question": "试用期员工请假需要体检吗？多久出结果？",
+      "expectPoints": ["试用期", "体检"],
+      "expectSources": ["试用期", "体检"],
+      "expectRefusal": false
+    },
+    {
+      "id": "leave-003",
+      "question": "年假有多少天？",
+      "expectPoints": ["年假"],
+      "expectSources": ["年假"],
+      "expectRefusal": false
+    },
+    {
+      "id": "leave-004",
+      "question": "病假需要提供什么材料？",
+      "expectPoints": ["病假"],
+      "expectSources": ["病假"],
+      "expectRefusal": false
+    },
+    {
+      "id": "leave-005",
+      "question": "总结一下这份文档的全部内容",
+      "expectPoints": ["请假"],
+      "expectSources": [],
+      "expectRefusal": false
+    },
+    {
+      "id": "refuse-001",
+      "question": "公司年会在哪一天举办？预算多少？",
+      "expectPoints": [],
+      "expectSources": [],
+      "expectRefusal": true
+    },
+    {
+      "id": "refuse-002",
+      "question": "帮我写一段 Python 快速排序代码",
+      "expectPoints": [],
+      "expectSources": [],
+      "expectRefusal": true
+    },
+    {
+      "id": "chat-001",
+      "question": "你好",
+      "expectPoints": [],
+      "expectSources": [],
+      "expectRefusal": false
+    }
+  ]
+}

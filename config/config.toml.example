@@ -46,3 +46,70 @@ maxContextTokens = 4000
 [voiceServiceConfig]
 voiceServiceApiKey = "your-voice-service-api-key"
 voiceServiceSecretKey = "your-voice-service-secret-key"
+
+# ============ 大模型（DeepSeek / OpenAI 兼容）连接配置 ============
+# 优先级：这里填了就用这里的 > 环境变量 > 代码默认值
+#   环境变量：DEEPSEEK_BASE_URL / DEEPSEEK_MODEL_NAME / DEEPSEEK_API_KEY
+#             （也兼容 OPENAI_BASE_URL / OPENAI_MODEL_NAME / OPENAI_API_KEY）
+#   代码默认：https://api.deepseek.com + deepseek-chat + 空 key
+# 留空即表示"用环境变量"，两种方式都支持。
+[deepSeekConfig]
+baseUrl = ""                   # 留空 = 读环境变量 DEEPSEEK_BASE_URL，再默认 https://api.deepseek.com
+modelName = ""                 # 留空 = 读 DEEPSEEK_MODEL_NAME，再默认 deepseek-chat
+apiKey = ""                    # 留空 = 读 DEEPSEEK_API_KEY / OPENAI_API_KEY（推荐：把 key 放环境变量）
+
+# ============ 模型计费与可观测（元 / 100 万 token）============
+# 用于把每次请求的 token 换算成费用，并累计到 /metrics
+[aiPricing]
+defaultPromptPrice = 2.0
+defaultCompletionPrice = 8.0
+dailyTokenQuota = 0            # 每用户每日 token 配额，0 = 不限
+
+[aiPricing.promptPrice]
+deepseek-chat = 2.0            # 输入价（元/1M token）
+qwen-turbo = 0.3
+
+[aiPricing.completionPrice]
+deepseek-chat = 8.0            # 输出价（元/1M token）
+qwen-turbo = 0.6
+
+# ============ 提示词 ============
+# 稳定的系统提示放在消息最前面，有利于命中上游 prompt 前缀缓存
+[aiPrompt]
+systemPrompt = "你是 DeepTalk 的智能助手。回答简洁、准确、有依据；不确定时明确说明，不要编造。"
+
+# ============ 语义缓存 ============
+# 相似问题直接返回缓存答案（省一次 LLM 调用）
+# 注意：仅对"会话首轮提问"生效（有历史上下文时同一问题答案会不同）
+[semanticCache]
+enabled = true
+threshold = 0.92               # 余弦相似度阈值，越高越保守
+maxEntries = 500
+ttlSeconds = 3600
+
+# ============ MCP 工具注册表 ============
+# 想给 AI 加工具时，在这里声明 MCP 服务端即可（支持多个，allowedTools 为空表示全部允许）
+# 注意：maxStep 必须写在 [[mcpConfig.servers]] 之前，
+#      否则 TOML 会把它归到最后一个 server 条目里（不是 mcpConfig 的属性）。
+[mcpConfig]
+maxStep = 5                    # Agent 最大推理步数
+
+# 方式一：远程 HTTP（StreamableHTTP）
+[[mcpConfig.servers]]
+name = "weather"
+url = "http://localhost:8081/mcp"
+allowedTools = ["get_weather"]
+
+# 方式二：本地子进程（社区工具大多是 npx / uvx 启动的 stdio 服务）
+# [[mcpConfig.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "C:/data"]
+# env = ["LOG_LEVEL=info"]
+# allowedTools = ["read_file", "list_directory"]   # 目录类工具建议按需白名单
+
+# [[mcpConfig.servers]]
+# name = "fetch"
+# command = "uvx"
+# args = ["mcp-server-fetch"]
+

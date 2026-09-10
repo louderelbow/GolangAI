@@ -4,7 +4,6 @@ import (
 	"context"
 	"deeptalk/common/rag"
 	"deeptalk/config"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -12,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/cloudwego/eino-ext/components/model/ollama"
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -20,9 +18,6 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
-	"github.com/mark3labs/mcp-go/mcp"
 )
 
 type StreamCallback func(msg string)
@@ -30,36 +25,59 @@ type StreamCallback func(msg string)
 // AIModel 定义AI模型接口
 type AIModel interface {
 	GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error)
-	StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error)
+	// StreamResponse 返回聚合后的完整回答 + token 用量（用于计费/可观测）
+	StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, *schema.TokenUsage, error)
 	GetModelType() string
+	GetModelName() string
+}
+
+// pickUsage 从流式分片里提取 token 用量
+// OpenAI 兼容协议（eino-ext 已开启 stream_options.include_usage）通常只在最后一个分片带上 usage，
+// 因此这里取"信息量最大"的那一份。
+func pickUsage(cur *schema.TokenUsage, msg *schema.Message) *schema.TokenUsage {
+	if msg == nil || msg.ResponseMeta == nil || msg.ResponseMeta.Usage == nil {
+		return cur
+	}
+	u := msg.ResponseMeta.Usage
+	if cur == nil || u.TotalTokens >= cur.TotalTokens {
+		return u
+	}
+	return cur
 }
 
 // =================== DeepSeek 实现（兼容 OpenAI 协议）===================
 type OpenAIModel struct {
-	llm model.ToolCallingChatModel
+	llm  model.ToolCallingChatModel
+	name string
+}
+
+// deepSeekSettings 解析大模型（OpenAI 兼容）连接配置
+// 优先级：config.toml 的 [deepSeekConfig] > 环境变量 > 代码默认值
+func deepSeekSettings() (baseURL, modelName, apiKey string) {
+	cfg := config.GetConfig().DeepSeekConfig
+
+	baseURL = firstNonEmpty(
+		cfg.BaseURL,
+		os.Getenv("DEEPSEEK_BASE_URL"),
+		os.Getenv("OPENAI_BASE_URL"),
+		"https://api.deepseek.com",
+	)
+	modelName = firstNonEmpty(
+		cfg.ModelName,
+		os.Getenv("DEEPSEEK_MODEL_NAME"),
+		os.Getenv("OPENAI_MODEL_NAME"),
+		"deepseek-chat",
+	)
+	apiKey = firstNonEmpty(
+		cfg.APIKey,
+		os.Getenv("DEEPSEEK_API_KEY"),
+		os.Getenv("OPENAI_API_KEY"),
+	)
+	return baseURL, modelName, apiKey
 }
 
 func NewOpenAIModel(ctx context.Context) (*OpenAIModel, error) {
-	baseURL := os.Getenv("DEEPSEEK_BASE_URL")
-	if baseURL == "" {
-		baseURL = os.Getenv("OPENAI_BASE_URL")
-	}
-	if baseURL == "" {
-		baseURL = "https://api.deepseek.com"
-	}
-
-	modelName := os.Getenv("DEEPSEEK_MODEL_NAME")
-	if modelName == "" {
-		modelName = os.Getenv("OPENAI_MODEL_NAME")
-	}
-	if modelName == "" {
-		modelName = "deepseek-chat"
-	}
-
-	key := os.Getenv("DEEPSEEK_API_KEY")
-	if key == "" {
-		key = os.Getenv("OPENAI_API_KEY")
-	}
+	baseURL, modelName, key := deepSeekSettings()
 
 	llm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		BaseURL: baseURL,
@@ -69,7 +87,7 @@ func NewOpenAIModel(ctx context.Context) (*OpenAIModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create deepseek model failed: %v", err)
 	}
-	return &OpenAIModel{llm: llm}, nil
+	return &OpenAIModel{llm: llm, name: modelName}, nil
 }
 
 func (o *OpenAIModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
@@ -80,14 +98,15 @@ func (o *OpenAIModel) GenerateResponse(ctx context.Context, messages []*schema.M
 	return resp, nil
 }
 
-func (o *OpenAIModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
+func (o *OpenAIModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, *schema.TokenUsage, error) {
 	stream, err := o.llm.Stream(ctx, messages)
 	if err != nil {
-		return "", fmt.Errorf("deepseek stream failed: %v", err)
+		return "", nil, fmt.Errorf("deepseek stream failed: %v", err)
 	}
 	defer stream.Close()
 
 	var fullResp strings.Builder
+	var usage *schema.TokenUsage
 
 	for {
 		msg, err := stream.Recv()
@@ -95,8 +114,9 @@ func (o *OpenAIModel) StreamResponse(ctx context.Context, messages []*schema.Mes
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("openai stream recv failed: %v", err)
+			return "", usage, fmt.Errorf("openai stream recv failed: %v", err)
 		}
+		usage = pickUsage(usage, msg)
 		if len(msg.Content) > 0 {
 			fullResp.WriteString(msg.Content) // 聚合
 
@@ -104,16 +124,18 @@ func (o *OpenAIModel) StreamResponse(ctx context.Context, messages []*schema.Mes
 		}
 	}
 
-	return fullResp.String(), nil //返回完整内容，方便后续存储
+	return fullResp.String(), usage, nil //返回完整内容，方便后续存储
 }
 
-func (o *OpenAIModel) GetModelType() string { return "1" }
+func (o *OpenAIModel) GetModelType() string { return ModelTypeDeepSeek }
+func (o *OpenAIModel) GetModelName() string { return o.name }
 
 // =================== Ollama 实现 ===================
 
 // OllamaModel Ollama模型实现
 type OllamaModel struct {
-	llm model.ToolCallingChatModel
+	llm  model.ToolCallingChatModel
+	name string
 }
 
 func NewOllamaModel(ctx context.Context, baseURL, modelName string) (*OllamaModel, error) {
@@ -124,7 +146,7 @@ func NewOllamaModel(ctx context.Context, baseURL, modelName string) (*OllamaMode
 	if err != nil {
 		return nil, fmt.Errorf("create ollama model failed: %v", err)
 	}
-	return &OllamaModel{llm: llm}, nil
+	return &OllamaModel{llm: llm, name: modelName}, nil
 }
 
 func (o *OllamaModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
@@ -135,34 +157,38 @@ func (o *OllamaModel) GenerateResponse(ctx context.Context, messages []*schema.M
 	return resp, nil
 }
 
-func (o *OllamaModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
+func (o *OllamaModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, *schema.TokenUsage, error) {
 	stream, err := o.llm.Stream(ctx, messages)
 	if err != nil {
-		return "", fmt.Errorf("ollama stream failed: %v", err)
+		return "", nil, fmt.Errorf("ollama stream failed: %v", err)
 	}
 	defer stream.Close()
 	var fullResp strings.Builder
+	var usage *schema.TokenUsage
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("openai stream recv failed: %v", err)
+			return "", usage, fmt.Errorf("ollama stream recv failed: %v", err)
 		}
+		usage = pickUsage(usage, msg)
 		if len(msg.Content) > 0 {
 			fullResp.WriteString(msg.Content) // 聚合
 			cb(msg.Content)                   // 实时调用cb函数，方便主动发送给前端
 		}
 	}
-	return fullResp.String(), nil //返回完整内容，方便后续存储
+	return fullResp.String(), usage, nil //返回完整内容，方便后续存储
 }
 
-func (o *OllamaModel) GetModelType() string { return "4" }
+func (o *OllamaModel) GetModelType() string { return ModelTypeOllama }
+func (o *OllamaModel) GetModelName() string { return o.name }
 
 // =================== RAG 实现 ===================
 type AliRAGModel struct {
 	llm      model.ToolCallingChatModel
+	name     string
 	username string // 用于获取用户的文档
 }
 
@@ -191,6 +217,7 @@ func NewAliRAGModel(ctx context.Context, username string) (*AliRAGModel, error) 
 	}
 	return &AliRAGModel{
 		llm:      llm,
+		name:     modelName,
 		username: username,
 	}, nil
 }
@@ -265,9 +292,9 @@ func (o *AliRAGModel) GenerateResponse(ctx context.Context, messages []*schema.M
 	return resp, nil
 }
 
-func (o *AliRAGModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
+func (o *AliRAGModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, *schema.TokenUsage, error) {
 	if len(messages) == 0 {
-		return "", fmt.Errorf("no messages provided")
+		return "", nil, fmt.Errorf("no messages provided")
 	}
 	lastMessage := messages[len(messages)-1]
 	query := lastMessage.Content
@@ -323,35 +350,38 @@ func (o *AliRAGModel) StreamResponse(ctx context.Context, messages []*schema.Mes
 
 	stream, err := o.llm.Stream(ctx, ragMessages)
 	if err != nil {
-		return "", fmt.Errorf("rag stream failed: %v", err)
+		return "", nil, fmt.Errorf("rag stream failed: %v", err)
 	}
 	defer stream.Close()
 	var fullResp strings.Builder
+	var usage *schema.TokenUsage
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return fullResp.String(), err
+			return fullResp.String(), usage, err
 		}
+		usage = pickUsage(usage, msg)
 		if len(msg.Content) > 0 {
 			fullResp.WriteString(msg.Content)
 			cb(msg.Content)
 		}
 	}
-	return fullResp.String(), nil
+	return fullResp.String(), usage, nil
 }
 
 // streamWithoutRAG 当没有 RAG 文档时的流式响应
-func (o *AliRAGModel) streamWithoutRAG(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
+func (o *AliRAGModel) streamWithoutRAG(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, *schema.TokenUsage, error) {
 	stream, err := o.llm.Stream(ctx, messages)
 	if err != nil {
-		return "", fmt.Errorf("ali rag stream failed: %v", err)
+		return "", nil, fmt.Errorf("ali rag stream failed: %v", err)
 	}
 	defer stream.Close()
 
 	var fullResp strings.Builder
+	var usage *schema.TokenUsage
 
 	for {
 		msg, err := stream.Recv()
@@ -359,18 +389,20 @@ func (o *AliRAGModel) streamWithoutRAG(ctx context.Context, messages []*schema.M
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("ali rag stream recv failed: %v", err)
+			return "", usage, fmt.Errorf("ali rag stream recv failed: %v", err)
 		}
+		usage = pickUsage(usage, msg)
 		if len(msg.Content) > 0 {
 			fullResp.WriteString(msg.Content)
 			cb(msg.Content)
 		}
 	}
 
-	return fullResp.String(), nil
+	return fullResp.String(), usage, nil
 }
 
-func (o *AliRAGModel) GetModelType() string { return "2" }
+func (o *AliRAGModel) GetModelType() string { return ModelTypeRAG }
+func (o *AliRAGModel) GetModelName() string { return o.name }
 
 // extractKeywords 用 LLM 从用户问题中提取关键词
 func (o *AliRAGModel) extractKeywords(ctx context.Context, query string) []string {
@@ -499,15 +531,16 @@ func parseDistance(v any) (float64, bool) {
 	}
 }
 
-// =================== MCP 实现 ===================
+// =================== MCP 实现（原生 function calling） ===================
+//
+// 工具来源与白名单全部走配置（[mcpConfig.servers]），见 mcp_tools.go：
+// 启动时从各 MCP 服务端拉取 tools/list，包装成 eino 工具，交给 Agent 让模型
+// 用**协议原生**的 tool_calls 调用 —— 不再依赖"让模型吐 JSON 再解析"。
 
-// MCPModel MCP模型实现，集成MCP服务
 type MCPModel struct {
-	llm        model.ToolCallingChatModel
-	mcpClient  *client.Client
-	mcpMu      sync.Mutex // 保护 mcpClient 的懒初始化
-	username   string
-	mcpBaseURL string
+	llm   model.ToolCallingChatModel
+	agent *react.Agent
+	name  string
 }
 
 // NewMCPModel 创建MCP模型实例
@@ -526,7 +559,6 @@ func NewMCPModel(ctx context.Context, username string) (*MCPModel, error) {
 	modelName := conf.RagModelConfig.RagChatModelName
 	baseURL := conf.RagModelConfig.RagBaseUrl
 
-	// 创建LLM
 	llm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		BaseURL: baseURL,
 		Model:   modelName,
@@ -536,205 +568,91 @@ func NewMCPModel(ctx context.Context, username string) (*MCPModel, error) {
 		return nil, fmt.Errorf("create mcp model failed: %v", err)
 	}
 
-	mcpBaseURL := os.Getenv("MCP_BASE_URL")
-	if mcpBaseURL == "" {
-		mcpBaseURL = "http://localhost:8081/mcp"
+	m := &MCPModel{llm: llm, name: modelName}
+
+	// 拉取 MCP 工具（注册表内部带缓存与白名单过滤）
+	tools := GetMCPRegistry().Tools(ctx)
+	if len(tools) == 0 {
+		// 没有任何工具时退化为普通对话，而不是直接报错
+		log.Printf("[MCP] no tools available, fallback to plain chat (user=%s)", username)
+		return m, nil
 	}
 
-	return &MCPModel{
-		llm:        llm,
-		mcpBaseURL: mcpBaseURL,
-		username:   username,
-	}, nil
-}
-
-// getMCPClient 获取或创建MCP客户端（并发安全，同一实例只建一次）
-func (m *MCPModel) getMCPClient(ctx context.Context) (*client.Client, error) {
-	m.mcpMu.Lock()
-	defer m.mcpMu.Unlock()
-
-	if m.mcpClient != nil {
-		return m.mcpClient, nil
+	maxStep := conf.McpConfig.MaxStep
+	if maxStep <= 0 {
+		maxStep = 5
 	}
 
-	// 创建MCP客户端
-	httpTransport, err := transport.NewStreamableHTTP(m.mcpBaseURL)
+	agent, err := react.NewAgent(ctx, &react.AgentConfig{
+		ToolCallingModel: llm,
+		ToolsConfig: compose.ToolsNodeConfig{
+			Tools: tools,
+		},
+		MaxStep: maxStep,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create mcp transport failed: %v", err)
+		return nil, fmt.Errorf("create mcp agent failed: %v", err)
 	}
-
-	mcpClient := client.NewClient(httpTransport)
-
-	// 初始化MCP客户端
-	initRequest := mcp.InitializeRequest{}
-	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "MCP-Go AIHelper Client",
-		Version: "1.0.0",
-	}
-	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
-
-	if _, err := mcpClient.Initialize(ctx, initRequest); err != nil {
-		_ = mcpClient.Close()
-		return nil, fmt.Errorf("mcp client initialize failed: %v", err)
-	}
-
-	m.mcpClient = mcpClient
-	return m.mcpClient, nil
+	m.agent = agent
+	log.Printf("[MCP] agent ready: user=%s tools=%d maxStep=%d", username, len(tools), maxStep)
+	return m, nil
 }
 
-// GenerateResponse 生成响应，集成MCP工具
+// GenerateResponse 生成响应（有工具时走 Agent，原生 function calling）
 func (m *MCPModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("no messages provided")
 	}
-
-	// 获取最后一条消息
-	lastMessage := messages[len(messages)-1]
-	query := lastMessage.Content
-
-	// 第一次调用AI：告诉AI使用固定的JSON格式
-	firstPrompt := m.buildFirstPrompt(query)
-	firstMessages := make([]*schema.Message, len(messages))
-	copy(firstMessages, messages)
-	firstMessages[len(firstMessages)-1] = &schema.Message{
-		Role:    schema.User,
-		Content: firstPrompt,
+	if m.agent == nil {
+		return m.llm.Generate(ctx, messages)
 	}
 
-	// 调用LLM生成第一次响应
-	firstResp, err := m.llm.Generate(ctx, firstMessages)
+	resp, err := m.agent.Generate(ctx, messages)
 	if err != nil {
-		return nil, fmt.Errorf("mcp first generate failed: %v", err)
+		return nil, fmt.Errorf("mcp agent generate failed: %v", err)
 	}
-	log.Println("first resp is ", firstResp)
-	// 解析AI响应
-	aiResult := firstResp.Content
-	toolCall, err := m.parseAIResponse(aiResult)
-	if err != nil {
-		log.Printf("Failed to parse AI response: %v", err)
-		return firstResp, nil
-	}
-
-	// 情况1：AI不调用工具，直接返回响应
-	if !toolCall.IsToolCall {
-		log.Println("toolCall IsToolCall is false ", firstResp)
-		return firstResp, nil
-	}
-	log.Println("toolCall IsToolCall is true ", firstResp)
-	// 情况2：AI要调用工具
-	// 获取MCP客户端
-	mcpClient, err := m.getMCPClient(ctx)
-	if err != nil {
-		log.Printf("MCP client error: %v", err)
-		return &schema.Message{
-			Role:    schema.Assistant,
-			Content: "抱歉，MCP服务未启动，无法调用工具获取数据。请先启动MCP服务。",
-		}, nil
-	}
-
-	// 调用MCP工具
-	toolResult, err := m.callMCPTool(ctx, mcpClient, toolCall.ToolName, toolCall.Args)
-	if err != nil {
-		log.Printf("MCP tool call failed: %v", err)
-		return &schema.Message{
-			Role:    schema.Assistant,
-			Content: fmt.Sprintf("抱歉，调用MCP工具 %s 失败：%v", toolCall.ToolName, err),
-		}, nil
-	}
-
-	// 第二次调用AI：将工具结果告诉AI
-	secondPrompt := m.buildSecondPrompt(query, toolCall.ToolName, toolCall.Args, toolResult)
-	secondMessages := make([]*schema.Message, len(messages))
-	copy(secondMessages, messages)
-	secondMessages[len(secondMessages)-1] = &schema.Message{
-		Role:    schema.User,
-		Content: secondPrompt,
-	}
-
-	// 调用LLM生成最终响应
-	finalResp, err := m.llm.Generate(ctx, secondMessages)
-
-	if err != nil {
-		return nil, fmt.Errorf("mcp second generate failed: %v", err)
-	}
-	log.Println("最终响应为：", finalResp)
-	return finalResp, nil
+	return resp, nil
 }
 
-// StreamResponse 流式响应，集成MCP工具
-func (m *MCPModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
+// StreamResponse 流式响应（有工具时走 Agent，原生 function calling）
+func (m *MCPModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, *schema.TokenUsage, error) {
 	if len(messages) == 0 {
-		return "", fmt.Errorf("no messages provided")
+		return "", nil, fmt.Errorf("no messages provided")
 	}
 
-	// 获取最后一条消息
-	lastMessage := messages[len(messages)-1]
-	query := lastMessage.Content
-
-	// 第一次调用AI：告诉AI使用固定的JSON格式
-	firstPrompt := m.buildFirstPrompt(query)
-	firstMessages := make([]*schema.Message, len(messages))
-	copy(firstMessages, messages)
-	firstMessages[len(firstMessages)-1] = &schema.Message{
-		Role:    schema.User,
-		Content: firstPrompt,
+	if m.agent == nil {
+		stream, err := m.llm.Stream(ctx, messages)
+		if err != nil {
+			return "", nil, fmt.Errorf("mcp stream failed: %v", err)
+		}
+		defer stream.Close()
+		var sb strings.Builder
+		var usage *schema.TokenUsage
+		for {
+			msg, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return sb.String(), usage, err
+			}
+			usage = pickUsage(usage, msg)
+			if len(msg.Content) > 0 {
+				sb.WriteString(msg.Content)
+				cb(msg.Content)
+			}
+		}
+		return sb.String(), usage, nil
 	}
 
-	// 第一次调用使用同步接口（非流式）
-	firstResp, err := m.llm.Generate(ctx, firstMessages)
+	stream, err := m.agent.Stream(ctx, messages)
 	if err != nil {
-		return "", fmt.Errorf("mcp first generate failed: %v", err)
-	}
-
-	aiResult := firstResp.Content
-	toolCall, err := m.parseAIResponse(aiResult)
-	if err != nil {
-		log.Printf("Failed to parse AI response: %v", err)
-		return aiResult, nil
-	}
-
-	// 情况1：AI不调用工具，直接返回响应
-	if !toolCall.IsToolCall {
-		return aiResult, nil
-	}
-
-	// 情况2：AI要调用工具
-	// 获取MCP客户端
-	mcpClient, err := m.getMCPClient(ctx)
-	if err != nil {
-		log.Printf("MCP client error: %v", err)
-		fallbackMsg := "抱歉，MCP服务未启动，无法调用工具获取数据。请先启动MCP服务。"
-		cb(fallbackMsg)
-		return fallbackMsg, nil
-	}
-
-	// 调用MCP工具
-	toolResult, err := m.callMCPTool(ctx, mcpClient, toolCall.ToolName, toolCall.Args)
-	if err != nil {
-		log.Printf("MCP tool call failed: %v", err)
-		fallbackMsg := fmt.Sprintf("抱歉，调用MCP工具 %s 失败：%v", toolCall.ToolName, err)
-		cb(fallbackMsg)
-		return fallbackMsg, nil
-	}
-
-	// 第二次调用AI：将工具结果告诉AI，使用流式接口
-	secondPrompt := m.buildSecondPrompt(query, toolCall.ToolName, toolCall.Args, toolResult)
-	secondMessages := make([]*schema.Message, len(messages))
-	copy(secondMessages, messages)
-	secondMessages[len(secondMessages)-1] = &schema.Message{
-		Role:    schema.User,
-		Content: secondPrompt,
-	}
-
-	// 调用LLM生成最终响应（流式）
-	stream, err := m.llm.Stream(ctx, secondMessages)
-	if err != nil {
-		return "", fmt.Errorf("mcp second stream failed: %v", err)
+		return "", nil, fmt.Errorf("mcp agent stream failed: %v", err)
 	}
 	defer stream.Close()
 
 	var finalResp strings.Builder
+	var usage *schema.TokenUsage
 
 	for {
 		msg, err := stream.Recv()
@@ -742,158 +660,35 @@ func (m *MCPModel) StreamResponse(ctx context.Context, messages []*schema.Messag
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("mcp second stream recv failed: %v", err)
+			return finalResp.String(), usage, fmt.Errorf("mcp agent stream recv failed: %v", err)
 		}
+		usage = pickUsage(usage, msg)
 		if len(msg.Content) > 0 {
 			finalResp.WriteString(msg.Content)
 			cb(msg.Content)
 		}
 	}
 
-	return finalResp.String(), nil
-}
-
-// AIToolCall 表示AI工具调用请求
-type AIToolCall struct {
-	IsToolCall bool                   `json:"isToolCall"`
-	ToolName   string                 `json:"toolName"`
-	Args       map[string]interface{} `json:"args"`
-}
-
-// buildFirstPrompt 构建第一次调用的提示词
-func (m *MCPModel) buildFirstPrompt(query string) string {
-	return fmt.Sprintf(`你是一个智能助手，可以调用MCP工具来获取信息。
-
-可用工具:
-- get_weather: 获取指定城市的天气信息，参数: city（城市名称，支持中文和英文，如北京、Shanghai等）
-
-重要规则:
-1. 如果需要调用工具，必须严格返回以下JSON格式：
-{
-  "isToolCall": true,
-  "toolName": "工具名称",
-  "args": {"参数名": "参数值"}
-}
-2. 如果不需要调用工具，直接返回自然语言回答
-3. 请根据用户问题决定是否需要调用工具
-
-用户问题: %s
-
-请根据需要调用适当的工具，然后给出综合的回答。`, query)
-}
-
-// buildSecondPrompt 构建第二次调用的提示词
-func (m *MCPModel) buildSecondPrompt(query, toolName string, args map[string]interface{}, toolResult string) string {
-	return fmt.Sprintf(`你是一个智能助手，可以调用MCP工具来获取信息。
-
-工具执行结果:
-工具名称: %s
-工具参数: %v
-工具结果: %s
-
-用户问题: %s
-
-请根据工具结果和用户问题，给出最终的综合回答。`, toolName, args, toolResult, query)
-}
-
-// parseAIResponse 解析AI响应，检查是否包含工具调用
-func (m *MCPModel) parseAIResponse(response string) (*AIToolCall, error) {
-	// 尝试解析为JSON
-	var toolCall AIToolCall
-	if err := json.Unmarshal([]byte(response), &toolCall); err == nil {
-		return &toolCall, nil
-	}
-
-	// 如果不是JSON，检查是否包含工具调用关键词
-	if strings.Contains(response, "get_weather") {
-		// 尝试提取城市名称
-		city := m.extractCityFromResponse(response)
-		if city != "" {
-			return &AIToolCall{
-				IsToolCall: true,
-				ToolName:   "get_weather",
-				Args:       map[string]interface{}{"city": city},
-			}, nil
-		}
-	}
-
-	// 不是工具调用
-	return &AIToolCall{IsToolCall: false}, nil
-}
-
-// callMCPTool 调用MCP工具
-func (m *MCPModel) callMCPTool(ctx context.Context, client *client.Client, toolName string, args map[string]interface{}) (string, error) {
-	callToolRequest := mcp.CallToolRequest{
-		Params: mcp.CallToolParams{
-			Name:      toolName,
-			Arguments: args,
-		},
-	}
-
-	result, err := client.CallTool(ctx, callToolRequest)
-	if err != nil {
-		return "", fmt.Errorf("mcp tool call failed: %v", err)
-	}
-
-	// 提取工具结果文本
-	var text string
-	for _, content := range result.Content {
-		if textContent, ok := content.(mcp.TextContent); ok {
-			text += textContent.Text + "\n"
-		}
-	}
-
-	return text, nil
-}
-
-// extractCityFromResponse 从响应中提取城市名称
-// 直接从AI返回的JSON中提取城市，不预留城市列表
-func (m *MCPModel) extractCityFromResponse(response string) string {
-	// 尝试从JSON中提取城市
-	var toolCall AIToolCall
-	if err := json.Unmarshal([]byte(response), &toolCall); err == nil {
-		if args, ok := toolCall.Args["city"].(string); ok {
-			return args
-		}
-	}
-
-	// 如果JSON解析失败，尝试从文本中提取城市名称
-	// 这部分可以根据实际需要扩展，但不再预留固定城市列表
-	return ""
+	return finalResp.String(), usage, nil
 }
 
 // GetModelType 获取模型类型
-func (m *MCPModel) GetModelType() string { return "3" }
+func (m *MCPModel) GetModelType() string { return ModelTypeMCP }
+
+// GetModelName 获取模型名
+func (m *MCPModel) GetModelName() string { return m.name }
 
 // =================== ReAct Agent 实现（类型 "5"） ===================
 
 type ReActModel struct {
-	agent  *react.Agent
-	llm    model.ToolCallingChatModel
+	agent *react.Agent
+	llm   model.ToolCallingChatModel
+	name  string
 }
 
 func NewReActModel(ctx context.Context) (*ReActModel, error) {
-	// 与 OpenAIModel 保持同样的配置来源（环境变量优先）
-	baseURL := os.Getenv("DEEPSEEK_BASE_URL")
-	if baseURL == "" {
-		baseURL = os.Getenv("OPENAI_BASE_URL")
-	}
-	if baseURL == "" {
-		baseURL = "https://api.deepseek.com"
-	}
-
-	modelName := os.Getenv("DEEPSEEK_MODEL_NAME")
-	if modelName == "" {
-		modelName = os.Getenv("OPENAI_MODEL_NAME")
-	}
-	if modelName == "" {
-		modelName = "deepseek-chat"
-	}
-
-	key := os.Getenv("DEEPSEEK_API_KEY")
-	if key == "" {
-		key = os.Getenv("OPENAI_API_KEY")
-	}
+	// 与 OpenAIModel 共用同一套配置解析（config.toml > 环境变量 > 默认值）
+	baseURL, modelName, key := deepSeekSettings()
 
 	llm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		BaseURL: baseURL,
@@ -905,18 +700,22 @@ func NewReActModel(ctx context.Context) (*ReActModel, error) {
 	}
 
 	tools := RegisterAllTools()
+	maxStep := config.GetConfig().McpConfig.MaxStep
+	if maxStep <= 0 {
+		maxStep = 5
+	}
 	agent, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: llm,
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: tools,
 		},
-		MaxStep: 5,
+		MaxStep: maxStep,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create react agent failed: %v", err)
 	}
 
-	return &ReActModel{agent: agent, llm: llm}, nil
+	return &ReActModel{agent: agent, llm: llm, name: modelName}, nil
 }
 
 func (r *ReActModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
@@ -927,28 +726,31 @@ func (r *ReActModel) GenerateResponse(ctx context.Context, messages []*schema.Me
 	return resp, nil
 }
 
-func (r *ReActModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, error) {
+func (r *ReActModel) StreamResponse(ctx context.Context, messages []*schema.Message, cb StreamCallback) (string, *schema.TokenUsage, error) {
 	stream, err := r.agent.Stream(ctx, messages)
 	if err != nil {
-		return "", fmt.Errorf("react stream failed: %v", err)
+		return "", nil, fmt.Errorf("react stream failed: %v", err)
 	}
 	defer stream.Close()
 
 	var fullResp strings.Builder
+	var usage *schema.TokenUsage
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return fullResp.String(), fmt.Errorf("react stream recv failed: %v", err)
+			return fullResp.String(), usage, fmt.Errorf("react stream recv failed: %v", err)
 		}
+		usage = pickUsage(usage, msg)
 		if len(msg.Content) > 0 {
 			fullResp.WriteString(msg.Content)
 			cb(msg.Content)
 		}
 	}
-	return fullResp.String(), nil
+	return fullResp.String(), usage, nil
 }
 
-func (r *ReActModel) GetModelType() string { return "5" }
+func (r *ReActModel) GetModelType() string { return ModelTypeReAct }
+func (r *ReActModel) GetModelName() string { return r.name }

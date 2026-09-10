@@ -2,6 +2,7 @@ package myjwt
 
 import (
 	"deeptalk/config"
+	"errors"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -31,12 +32,18 @@ func GenerateToken(id int64, username string) (string, error) {
 }
 
 // ParseToken 解析Token
+// 注意：jwt.ParseWithClaims 在 token 格式非法时会返回 (nil, err)，
+// 所以必须先判 err/t == nil，否则对畸形 token 会空指针 panic。
 func ParseToken(token string) (string, bool) {
 	claims := new(Claims)
 	t, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (interface{}, error) {
+		// 限定签名算法，避免 alg 混淆类攻击（如 alg=none / RS256 混淆）
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
 		return []byte(config.GetConfig().Key), nil
 	})
-	if !t.Valid || err != nil || claims == nil {
+	if err != nil || t == nil || !t.Valid || claims == nil {
 		return "", false
 	}
 	return claims.Username, true
