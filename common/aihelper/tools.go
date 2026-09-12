@@ -2,6 +2,7 @@ package aihelper
 
 import (
 	"context"
+	"deeptalk/common/resilience"
 	"fmt"
 	"io"
 	"log"
@@ -262,7 +263,9 @@ func queryWeatherDirect(ctx context.Context, city string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := weatherClient.Do(req)
+	resp, err := resilience.Do(resilience.HTTPKey("wttr-weather"), func() (*http.Response, error) {
+		return weatherClient.Do(req)
+	})
 	if err != nil {
 		return "", err
 	}

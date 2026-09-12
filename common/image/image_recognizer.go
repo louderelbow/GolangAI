@@ -3,6 +3,7 @@ package image
 import (
 	"bytes"
 	"context"
+	"deeptalk/common/resilience"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -102,7 +103,10 @@ func (r *ImageRecognizer) callVisionAPI(ctx context.Context, imageData []byte) (
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+r.apiKey)
 
-	resp, err := httpClient.Do(req)
+	// 多模态接口走熔断：连续失败时快速拒绝，不把请求堆到已挂的服务上
+	resp, err := resilience.Do(resilience.HTTPKey("dashscope-vision"), func() (*http.Response, error) {
+		return httpClient.Do(req)
+	})
 	if err != nil {
 		return "", fmt.Errorf("api call failed: %w", err)
 	}

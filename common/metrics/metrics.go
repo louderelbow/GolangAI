@@ -249,7 +249,33 @@ const (
 	MetricAIDuration    = "deeptalk_ai_request_duration_seconds"
 	MetricAICacheHits   = "deeptalk_ai_cache_total"
 	MetricActiveSession = "deeptalk_ai_active_sessions"
+
+	// 熔断器（sony/gobreaker）
+	MetricCBState    = "deeptalk_circuit_breaker_state"          // 0=closed 1=half-open 2=open
+	MetricCBEvents   = "deeptalk_circuit_breaker_events_total"   // 状态迁移次数
+	MetricCBRejected = "deeptalk_circuit_breaker_rejected_total" // 因熔断被快速拒绝的次数
 )
+
+var cbStateValue = map[string]float64{"closed": 0, "half-open": 1, "open": 2}
+
+// SetCircuitState 记录熔断器当前状态（供 /metrics 暴露）
+func SetCircuitState(name, state string) {
+	v, ok := cbStateValue[state]
+	if !ok {
+		v = -1
+	}
+	defaultRegistry.SetGauge(MetricCBState, Labels{"name": name}, v)
+}
+
+// CountCircuitEvent 记录一次状态迁移
+func CountCircuitEvent(name, to string) {
+	defaultRegistry.Count(MetricCBEvents, Labels{"name": name, "to": to}, 1)
+}
+
+// CountCircuitRejected 记录一次"因熔断被快速拒绝"
+func CountCircuitRejected(name string) {
+	defaultRegistry.Count(MetricCBRejected, Labels{"name": name}, 1)
+}
 
 // AIRequest AI 请求观测数据
 type AIRequest struct {

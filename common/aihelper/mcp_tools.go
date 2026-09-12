@@ -2,6 +2,7 @@ package aihelper
 
 import (
 	"context"
+	"deeptalk/common/resilience"
 	"deeptalk/config"
 	"encoding/json"
 	"fmt"
@@ -20,15 +21,6 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
-
-// ======================== MCP 工具注册表 ========================
-//
-// 目标：把"能调用哪些工具"变成配置，而不是硬编码在提示词里。
-//   - 配置 [mcpConfig.servers] 声明一个或多个 MCP 服务端（name/url/allowedTools）
-//   - 启动后按服务端拉取工具清单（tools/list），按白名单过滤
-//   - 每个 MCP 工具包装成 eino 的 tool.InvokableTool，交给模型做**原生 function calling**
-//
-// 相比旧的"两段式 JSON 提示词"：不再靠模型吐 JSON 再猜，工具签名由协议保证。
 
 type mcpServer struct {
 	name         string
@@ -308,8 +300,11 @@ func (t *mcpTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts
 	start := time.Now()
 	log.Printf("[MCP] CALL tool=%s args=%s", t.name, truncate(argumentsInJSON, 200))
 
-	res, err := t.client.CallTool(ctx, mcp.CallToolRequest{
-		Params: mcp.CallToolParams{Name: t.origin, Arguments: args},
+	// 每个工具一个熔断器：某个工具服务挂了不会拖垮其它工具
+	res, err := resilience.Do(resilience.MCPKey(t.name), func() (*mcp.CallToolResult, error) {
+		return t.client.CallTool(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{Name: t.origin, Arguments: args},
+		})
 	})
 	if err != nil {
 		log.Printf("[MCP] tool=%s failed after %s: %v", t.name, time.Since(start).Round(time.Millisecond), err)

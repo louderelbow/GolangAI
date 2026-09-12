@@ -15,10 +15,13 @@ const (
 	CodeInvalidCaptcha  Code = 2008
 	CodeSessionNotExist Code = 2009
 
-	CodeServerBusy Code = 4001
-	CodeRateLimited Code = 4002
+	CodeServerBusy    Code = 4001
+	CodeRateLimited   Code = 4002
+	CodeQuotaExceeded Code = 4003
 
 	AIModelFail Code = 5003
+	// CodeAIServiceUnavailable AI 上游被熔断（连续失败后快速拒绝，不再打下游）
+	CodeAIServiceUnavailable Code = 5004
 )
 
 var msg = map[Code]string{
@@ -32,10 +35,12 @@ var msg = map[Code]string{
 	CodeInvalidCaptcha:  "验证码错误",
 	CodeSessionNotExist: "会话不存在",
 
-	CodeServerBusy:  "服务繁忙",
-	CodeRateLimited: "请求过于频繁，请稍后再试",
+	CodeServerBusy:    "服务繁忙",
+	CodeRateLimited:   "请求过于频繁，请稍后再试",
+	CodeQuotaExceeded: "今日 AI 调用配额已用尽，请明天再试",
 
-	AIModelFail: "模型运行失败",
+	AIModelFail:              "模型运行失败",
+	CodeAIServiceUnavailable: "AI 服务暂时不可用，请稍后重试",
 }
 
 func (code Code) Code() int64 {

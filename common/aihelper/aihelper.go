@@ -4,6 +4,7 @@ import (
 	"context"
 	"deeptalk/common/metrics"
 	"deeptalk/common/rabbitmq"
+	"deeptalk/common/resilience"
 	"deeptalk/model"
 	"deeptalk/utils"
 	"log"
@@ -187,8 +188,13 @@ func (a *AIHelper) GenerateResponse(ctx context.Context, userName string, userQu
 		}
 	}
 
-	//调用模型生成回复
-	schemaMsg, err := a.model.GenerateResponse(ctx, a.schemaMessages())
+	//调用模型生成回复（走熔断：上游连续失败时快速失败，不再把请求堆到已挂的服务上）
+	var schemaMsg *schema.Message
+	err := resilience.DoErr(resilience.ModelKey(modelName), func() error {
+		var e error
+		schemaMsg, e = a.model.GenerateResponse(ctx, a.schemaMessages())
+		return e
+	})
 	if err != nil {
 		recordAIFailure(userName, modelName, modelType, start, err)
 		return nil, err
@@ -246,7 +252,13 @@ func (a *AIHelper) StreamResponse(ctx context.Context, userName string, cb Strea
 		}
 	}
 
-	content, usage, err := a.model.StreamResponse(ctx, a.schemaMessages(), cb)
+	var content string
+	var usage *schema.TokenUsage
+	err := resilience.DoErr(resilience.ModelKey(modelName), func() error {
+		var e error
+		content, usage, e = a.model.StreamResponse(ctx, a.schemaMessages(), cb)
+		return e
+	})
 	if err != nil {
 		recordAIFailure(userName, modelName, modelType, start, err)
 		return nil, err

@@ -278,7 +278,20 @@ maxStep = 5                        # Agent 最大推理步数
 - **已登录接口**（`/AI/chat/*`）：Token Bucket，每用户容量 10 次突发、每秒补充 2 次
 - **未登录接口**（`/user/register`、`/user/login`、`/user/captcha`）：按 **IP** 限流，容量 5 次、每 5 秒补 1 次（防刷验证码/暴力破解）
 - 超限返回 HTTP 429 `{"status_code":4002,"status_msg":"请求过于频繁，请稍后再试"}`
-- **Redis 不可用时降级本地内存限流**（仍有限流效果，而不是放行）；Redis 报错后会熔断 5 秒，避免每个请求都去等连接超时
+- **Redis 不可用时降级本地内存限流**（仍有限流效果，而不是放行）；Redis 报错由熔断器接管（连续失败即打开，见下）
+
+## 熔断（sony/gobreaker）
+
+按**依赖粒度**独立熔断，而不是全局一个开关：`llm:<模型>` / `redis:<用途>` / `mcp:<工具>` / `http:<服务>`。
+三态机（closed → open → half-open → closed），跳闸规则为「连续失败 N 次」**或**「失败率超阈值且样本足够」；
+客户端主动取消（`context.Canceled`）不计为下游故障，避免用户关页面把服务判死。
+
+已接入：各 LLM（按模型名）、Redis 限流与配额、MCP 工具（按工具名）、图片识别 / 百度 TTS / 天气 / Embedding。
+
+配置：`[resilience]`（`failureThreshold` / `failureRatio` / `timeoutSeconds` …），`disabled = true` 可整体关闭。
+指标：`deeptalk_circuit_breaker_state{name}`（0=closed 1=half-open 2=open）、`..._events_total`、`..._rejected_total`。
+
+实测（上游全部返回 500）：前 5 次真实失败各约 1040ms，两个熔断器同时打开后，第 6 次起 **约 20ms 快速失败**，返回 5004「AI 服务暂时不可用」。
 
 ## 请求限制（生产注意）
 

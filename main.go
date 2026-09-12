@@ -7,6 +7,7 @@ import (
 	"deeptalk/common/mysql"
 	"deeptalk/common/rabbitmq"
 	"deeptalk/common/redis"
+	"deeptalk/common/resilience"
 	"deeptalk/config"
 	"deeptalk/dao/message"
 	"deeptalk/model"
@@ -54,8 +55,13 @@ func main() {
 	redis.Init()
 	log.Println("redis init success  ")
 
-	// 配额计数走 Redis（多实例共享、重启不丢）；Redis 不可用时自动退回进程内计数
-	metrics.SetQuotaStore(redis.QuotaIncr)
+	// 配额计数走 Redis（多实例共享、重启不丢），外面套熔断器：
+	// Redis 连续失败会打开熔断，此时自动退回进程内计数，不再等连接超时
+	metrics.SetQuotaStore(func(user, day string, delta int64) (int64, error) {
+		return resilience.Do(resilience.RedisKey("quota"), func() (int64, error) {
+			return redis.QuotaIncr(user, day, delta)
+		})
+	})
 
 	rabbitmq.InitRabbitMQ()
 	log.Println("rabbitmq init success  ")

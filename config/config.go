@@ -114,6 +114,41 @@ type McpConfig struct {
 	MaxStep int               `toml:"maxStep"` // Agent 最大推理步数
 }
 
+// ResilienceConfig 熔断器配置（基于 sony/gobreaker）
+// 默认开启；Disabled=true 时所有调用直连（只保留原有超时/降级逻辑）
+type ResilienceConfig struct {
+	Disabled bool `toml:"disabled"`
+
+	FailureThreshold    int     `toml:"failureThreshold"`    // 连续失败多少次跳闸（默认 5）
+	FailureRatio        float64 `toml:"failureRatio"`        // 失败率阈值，配合 MinRequests 生效（默认 0.6）
+	MinRequests         int     `toml:"minRequests"`         // 统计失败率所需最小请求数（默认 10）
+	TimeoutSeconds      int     `toml:"timeoutSeconds"`      // open 持续多久后进入 half-open（默认 30）
+	MaxRequestsHalfOpen int     `toml:"maxRequestsHalfOpen"` // half-open 允许的试探请求数（默认 3）
+	IntervalSeconds     int     `toml:"intervalSeconds"`     // 关闭态计数窗口滚动周期（默认 60）
+}
+
+func (c ResilienceConfig) withDefaults() ResilienceConfig {
+	if c.FailureThreshold <= 0 {
+		c.FailureThreshold = 5
+	}
+	if c.FailureRatio <= 0 {
+		c.FailureRatio = 0.6
+	}
+	if c.MinRequests <= 0 {
+		c.MinRequests = 10
+	}
+	if c.TimeoutSeconds <= 0 {
+		c.TimeoutSeconds = 30
+	}
+	if c.MaxRequestsHalfOpen <= 0 {
+		c.MaxRequestsHalfOpen = 3
+	}
+	if c.IntervalSeconds <= 0 {
+		c.IntervalSeconds = 60
+	}
+	return c
+}
+
 type Config struct {
 	EmailConfig        `toml:"emailConfig"`
 	RedisConfig        `toml:"redisConfig"`
@@ -127,6 +162,12 @@ type Config struct {
 	AiPromptConfig     `toml:"aiPrompt"`
 	SemanticCache      SemanticCacheConfig `toml:"semanticCache"`
 	McpConfig          `toml:"mcpConfig"`
+	ResilienceConfig   `toml:"resilience"`
+}
+
+// GetResilience 返回填好默认值的熔断配置
+func (c *Config) GetResilience() ResilienceConfig {
+	return c.ResilienceConfig.withDefaults()
 }
 
 type RedisKeyConfig struct {

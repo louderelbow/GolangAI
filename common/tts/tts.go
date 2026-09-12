@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"deeptalk/common/resilience"
 	"deeptalk/config"
 	"encoding/json"
 	"fmt"
@@ -174,7 +175,9 @@ func (s *TTSService) callBaiduAPI(ctx context.Context, text string) ([]byte, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := httpClient.Do(req)
+	resp, err := resilience.Do(resilience.HTTPKey("baidu-tts"), func() (*http.Response, error) {
+		return httpClient.Do(req)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +226,9 @@ func (s *TTSService) getAccessToken(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := httpClient.Do(req)
+	resp, err := resilience.Do(resilience.HTTPKey("baidu-oauth"), func() (*http.Response, error) {
+		return httpClient.Do(req)
+	})
 	if err != nil {
 		return "", err
 	}

@@ -4,32 +4,25 @@ import (
 	"context"
 	"deeptalk/common/code"
 	myredis "deeptalk/common/redis"
+	"deeptalk/common/resilience"
 	"deeptalk/controller"
 	"log"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 // ======================== Token Bucket 限流中间件 ========================
-//
-// 设计思路：
-//   - 主方案: Redis Token Bucket，分布式环境下多实例共享计数
-//   - 降级方案: 本地 sync.Map 内存限流，Redis 不可用时不阻塞业务
-//   - per-user: 容量 10 token，每秒补充 2 token
-//   - per-ip:   容量 5 token，每 5 秒补充 1 token（用于未登录接口：验证码/登录/注册）
-//   - 超限返回 429 + 友好提示
 
 const (
-	rateLimitCapacity  = 10   // 桶容量（突发峰值允许 10 个请求）
-	rateLimitRefill    = 2    // 每秒补充 token 数
+	rateLimitCapacity  = 10 // 桶容量（突发峰值允许 10 个请求）
+	rateLimitRefill    = 2  // 每秒补充 token 数
 	rateLimitKeyPrefix = "ratelimit:"
 
-	ipRateLimitCapacity = 5    // 未登录接口按 IP 限流：桶容量
-	ipRateLimitRefill   = 0.2  // 每 5 秒补充 1 个
+	ipRateLimitCapacity  = 5   // 未登录接口按 IP 限流：桶容量
+	ipRateLimitRefill    = 0.2 // 每 5 秒补充 1 个
 	ipRateLimitKeyPrefix = "ratelimit:ip:"
 )
 
@@ -40,7 +33,6 @@ type bucketState struct {
 }
 
 // RateLimit 返回一个 gin 限流中间件（按登录用户）
-// 必须在 JWT 中间件之后使用（需要从 context 取 userName）
 func RateLimit() gin.HandlerFunc {
 	limiter := newTokenBucket(rateLimitCapacity, rateLimitRefill, rateLimitKeyPrefix)
 
@@ -108,33 +100,24 @@ func (b *tokenBucket) allow(ctx context.Context, id string) bool {
 	key := b.prefix + id
 	nowNano := time.Now().UnixNano()
 
-	// Redis 故障期间直接走本地桶：既保证限流依然生效，也避免每个请求都去等一次连接超时
-	if myredis.Rdb != nil && !redisCoolingDown() {
-		allowed, ok := redisTokenBucket(ctx, key, nowNano, b.capacity, b.refill)
-		if ok {
+	// Redis 走熔断器保护：连续失败后熔断打开，直接走本地桶
+	if myredis.Rdb != nil {
+		allowed, err := resilience.Do(resilience.RedisKey("ratelimit"), func() (bool, error) {
+			return redisTokenBucket(ctx, key, nowNano, b.capacity, b.refill)
+		})
+		if err == nil {
 			return allowed
+		}
+		if !resilience.IsOpen(err) {
+			log.Printf("[RateLimit] Redis 调用失败，降级本地限流: %v", err)
 		}
 	}
 	return b.localTokenBucket(key, nowNano)
 }
 
-// redisCoolingDown Redis 刚失败过的一小段时间内不再尝试（熔断降级）
-var redisDownUntil atomic.Int64
-
-const redisCooldown = 5 * time.Second
-
-func redisCoolingDown() bool {
-	return time.Now().UnixNano() < redisDownUntil.Load()
-}
-
-func markRedisDown() {
-	redisDownUntil.Store(time.Now().Add(redisCooldown).UnixNano())
-}
-
 // redisTokenBucket Redis 分布式 Token Bucket
 // 使用 Lua 脚本保证"计算补充 → 判断 → 扣减"的原子性
-// 第二个返回值 ok=false 表示 Redis 不可用（调用方应降级到本地桶，而不是放行）
-func redisTokenBucket(ctx context.Context, key string, nowNano int64, capacity, refill float64) (bool, bool) {
+func redisTokenBucket(ctx context.Context, key string, nowNano int64, capacity, refill float64) (bool, error) {
 	const script = `
 		local state = redis.call('GET', KEYS[1])
 		local capacity = tonumber(ARGV[1])
@@ -171,17 +154,13 @@ func redisTokenBucket(ctx context.Context, key string, nowNano int64, capacity, 
 
 	result, err := myredis.Rdb.Eval(ctx, script, []string{key}, capacity, refill, nowNano).Int()
 	if err != nil {
-		// Redis 异常（连接断开/超时）：标记熔断并让调用方降级到本地限流，
-		// 不能直接放行，否则 Redis 一挂限流就等于不存在
-		log.Printf("[RateLimit] Redis 异常，降级本地限流: %v", err)
-		markRedisDown()
-		return false, false
+		// 返回错误交给熔断器计数：连续失败会打开熔断，调用方自动降级本地限流。
+		return false, err
 	}
-	return result == 1, true
+	return result == 1, nil
 }
 
 // localTokenBucket 本地内存 Token Bucket（Redis 不可用时兜底）
-// 注意：单机有效，多实例部署时各算各的；必须加锁保证读-改-写原子
 func (b *tokenBucket) localTokenBucket(key string, nowNano int64) bool {
 	b.localMu.Lock()
 	defer b.localMu.Unlock()

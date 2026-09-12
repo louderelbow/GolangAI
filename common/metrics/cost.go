@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"deeptalk/config"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -113,9 +114,12 @@ func localQuotaAdd(user, day string, delta int64) int64 {
 	return localQuotaUsage[user]
 }
 
+// ErrQuotaExceeded 配额用尽（哨兵错误：调用方用 errors.Is 判断后返回对应业务码）
+var ErrQuotaExceeded = errors.New("daily ai quota exceeded")
+
 // QuotaExceeded 构造配额超限错误信息
 func QuotaExceeded(used int64, limit int) error {
-	return fmt.Errorf("今日 token 配额已用尽（已用 %d / 上限 %d），请明天再试", used, limit)
+	return fmt.Errorf("%w: 已用 %d / 上限 %d", ErrQuotaExceeded, used, limit)
 }
 
 // QuotaKey Redis 配额 key（供外部注入的 store 使用）

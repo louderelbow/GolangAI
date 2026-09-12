@@ -3,6 +3,7 @@ package aihelper
 import (
 	"context"
 	"deeptalk/common/metrics"
+	"deeptalk/common/resilience"
 	"deeptalk/config"
 	"fmt"
 	"log"
@@ -38,6 +39,9 @@ type semanticCache struct {
 }
 
 var globalSemanticCache = &semanticCache{}
+
+// semanticEmbedTimeout 语义缓存 embedding 的超时：超了就放弃缓存，不能拖慢主流程
+const semanticEmbedTimeout = 3 * time.Second
 
 // GetSemanticCache 全局语义缓存
 func GetSemanticCache() *semanticCache { return globalSemanticCache }
@@ -96,7 +100,12 @@ func (c *semanticCache) embedOne(ctx context.Context, text string) ([]float64, e
 		return nil, c.embedErr
 	}
 
-	vecs, err := c.embedder.EmbedStrings(ctx, []string{text})
+	embedCtx, cancel := context.WithTimeout(ctx, semanticEmbedTimeout)
+	defer cancel()
+
+	vecs, err := resilience.Do(resilience.HTTPKey("embedding"), func() ([][]float64, error) {
+		return c.embedder.EmbedStrings(embedCtx, []string{text})
+	})
 	if err != nil {
 		return nil, err
 	}

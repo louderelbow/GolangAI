@@ -4,17 +4,36 @@ import (
 	"context"
 	"deeptalk/common/aihelper"
 	"deeptalk/common/code"
+	"deeptalk/common/metrics"
+	"deeptalk/common/resilience"
 	"deeptalk/dao/message"
 	"deeptalk/dao/session"
 	"deeptalk/model"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 
 	"github.com/google/uuid"
 )
 
-// normalizeModelType 校验并规范化创建会话时的模型类型
+// mapAIError 把 AI 层错误映射成业务码：
+//   - 每日配额用尽 → 4003
+//   - 熔断打开（上游连续失败，快速拒绝）→ 5004
+//   - 其它 → 5003 模型运行失败
+func mapAIError(err error) code.Code {
+	switch {
+	case err == nil:
+		return code.CodeSuccess
+	case errors.Is(err, metrics.ErrQuotaExceeded):
+		return code.CodeQuotaExceeded
+	case resilience.IsOpen(err):
+		return code.CodeAIServiceUnavailable
+	default:
+		return code.AIModelFail
+	}
+}
+
 func normalizeModelType(modelType string) (string, bool) {
 	if modelType == "" {
 		return aihelper.DefaultModelType, true
@@ -114,7 +133,7 @@ func CreateSessionAndSendMessage(ctx context.Context, userName string, userQuest
 	aiResponse, err_ := helper.GenerateResponse(ctx, userName, userQuestion)
 	if err_ != nil {
 		log.Println("CreateSessionAndSendMessage GenerateResponse error:", err_)
-		return "", "", code.AIModelFail
+		return "", "", mapAIError(err_)
 	}
 
 	return createdSession.ID, aiResponse.Content, code.CodeSuccess
@@ -194,7 +213,7 @@ func StreamMessageToExistingSession(ctx context.Context, userName string, sessio
 			// 客户端已断开，无法再回传错误
 			return code.CodeSuccess
 		}
-		return code.AIModelFail
+		return mapAIError(err_)
 	}
 
 	if writeFailed {
@@ -243,7 +262,7 @@ func ChatSend(ctx context.Context, userName string, sessionID string, userQuesti
 	aiResponse, err_ := helper.GenerateResponse(ctx, userName, userQuestion)
 	if err_ != nil {
 		log.Println("ChatSend GenerateResponse error:", err_)
-		return "", code.AIModelFail
+		return "", mapAIError(err_)
 	}
 
 	return aiResponse.Content, code.CodeSuccess
