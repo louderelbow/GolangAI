@@ -18,8 +18,6 @@ import (
 )
 
 // GetRandomNumbers 生成 num 位数字串（验证码/账号）
-// 必须使用 crypto/rand：math/rand 的序列在知道种子/输出后可被预测，
-// 用在验证码上等于给暴力破解开绿灯。
 func GetRandomNumbers(num int) string {
 	if num <= 0 {
 		return ""
@@ -66,14 +64,7 @@ func ConvertToModelMessage(sessionID string, userName string, msg *schema.Messag
 }
 
 // 将数据库消息转换为 schema 消息（供 AI 使用）
-//
-// 顺序刻意设计成「稳定前缀在前、易变内容在后」，用来命中上游的 prompt 前缀缓存：
-//   1. 固定 system 提示（配置项，永远不变）
-//   2. 历史摘要（相对稳定）
-//   3. 历史消息（前缀逐轮增长）
-//   4. 当前时间（每次都变，必须放到后面，否则整个前缀每次都不同）
-//   5. 本轮提问
-//
+
 // 以前把「当前时间」放在第 0 位，等于每次请求都把前缀改掉，缓存命中率恒为 0。
 func ConvertToSchemaMessages(msgs []*model.Message, summary string) []*schema.Message {
 	cfg := config.GetConfig()

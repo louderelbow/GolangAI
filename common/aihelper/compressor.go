@@ -31,7 +31,6 @@ func (c *Compressor) ShouldCompress(messages []*model.Message) bool {
 }
 
 // Compress 压缩历史消息：保留最近 N 轮，旧消息用 LLM 生成摘要
-// 返回：保留的消息列表 + 旧消息摘要（调用方负责把摘要作为 system 消息注入，不要当成 assistant 回复）
 func (c *Compressor) Compress(ctx context.Context, messages []*model.Message, llm AIModel) ([]*model.Message, string, error) {
 	totalTokens := c.estimateTokens(messages)
 	if totalTokens <= c.maxTokens || len(messages) <= 4 {
@@ -79,7 +78,6 @@ func (c *Compressor) countTokens(text string) int {
 }
 
 // summarize 调用 LLM 生成旧消息的简洁摘要
-// 注意：ctx 必须透传（不能传 nil），否则底层 HTTP 客户端会空指针 panic
 func (c *Compressor) summarize(ctx context.Context, messages []*model.Message, llm AIModel) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()

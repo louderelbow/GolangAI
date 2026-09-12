@@ -18,19 +18,16 @@ import (
 )
 
 const (
-	// 百度短文本在线合成单次 tex 上限为 60 字符，这里留安全余量
 	baiduMaxCharsPerRequest = 50
-	// 单次请求最多合成的字符数（与 controller 的校验保持一致）
+	// 单次请求最多合成的字符数
 	maxTextRunes = 1000
-
-	httpTimeout = 15 * time.Second
+	httpTimeout  = 15 * time.Second
 
 	// 缓存上限：避免音频数据无限占用内存
 	maxCacheEntries = 200
 	maxCacheBytes   = 32 << 20 // 32MB
 )
 
-// httpClient 必须设置超时：默认 client 遇到网络异常会一直挂着，拖死 gin worker
 var httpClient = &http.Client{Timeout: httpTimeout}
 
 // ------------------ 有界音频缓存 ------------------
@@ -102,7 +99,6 @@ func (s *TTSService) GetOrCreateTTS(ctx context.Context, text string) ([]byte, e
 		return cached, nil
 	}
 
-	// 百度短文本接口单次最多 60 字符，长文本必须分片合成后拼接
 	parts := splitText(text, baiduMaxCharsPerRequest)
 	audioBytes := make([]byte, 0, 64*1024)
 	for _, part := range parts {
@@ -142,7 +138,6 @@ func splitText(text string, maxChars int) []string {
 	}
 	flush()
 
-	// 极端情况（没有标点的超长串）已在上面按长度切开
 	return parts
 }
 
@@ -199,7 +194,6 @@ func (s *TTSService) callBaiduAPI(ctx context.Context, text string) ([]byte, err
 	return audioBytes, nil
 }
 
-// accessToken 缓存（百度 token 默认 30 天有效，每次请求都去换是纯浪费）
 var (
 	tokenMu     sync.Mutex
 	cachedToken string

@@ -19,14 +19,11 @@ type AIHelper struct {
 	model     AIModel
 	modelType string // 该会话绑定的模型类型（创建后不再改变）
 	messages  []*model.Message
-	summary   string // 被压缩掉的早期历史的摘要，作为 system 上下文注入
-
-	mu   sync.RWMutex // 保护 messages / summary
-	turn sync.Mutex   // 同一会话内的对话轮次串行化（避免并发写入导致历史错乱）
-
+	summary   string       // 被压缩掉的早期历史的摘要，作为 system 上下文注入
+	mu        sync.RWMutex // 保护 messages / summary
+	turn      sync.Mutex   // 同一会话内的对话轮次串行化（避免并发写入导致历史错乱）
 	// lastUsed 最近一次使用时间（纳秒），供管理器的空闲淘汰使用
 	lastUsed int64
-
 	//一个会话绑定一个AIHelper
 	SessionID string
 	saveFunc  func(*model.Message) (*model.Message, error)

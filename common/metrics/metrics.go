@@ -11,11 +11,6 @@ import (
 
 // ======================== 轻量指标注册表 ========================
 //
-// 为什么不用 prometheus/client_golang：
-//   本项目只需要 counter + histogram + gauge，手写 exposition 格式零依赖，
-//   避免为了几个指标引入一整棵依赖树（也避免 go.sum 变动）。
-//   格式与 Prometheus 完全兼容，可直接被抓取。
-//
 // 用法：
 //   metrics.Count("deeptalk_ai_requests_total", metrics.Labels{"model": "deepseek-chat", "status": "ok"}, 1)
 //   metrics.Observe("deeptalk_ai_request_duration_seconds", metrics.Labels{"model": "..."}, seconds)
@@ -172,9 +167,6 @@ func (r *Registry) Snapshot() string {
 		}
 	}
 
-	// 所有"已登记或已有数据"的指标都先输出 HELP/TYPE：
-	// 即使还没有任何数据点（服务刚启动），/metrics 也不会是空响应，
-	// Prometheus 也能立刻发现指标名字。
 	nameSet := map[string]struct{}{}
 	for _, s := range r.counters {
 		nameSet[s.name] = struct{}{}

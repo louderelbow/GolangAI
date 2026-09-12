@@ -31,9 +31,6 @@ type AIModel interface {
 	GetModelName() string
 }
 
-// pickUsage 从流式分片里提取 token 用量
-// OpenAI 兼容协议（eino-ext 已开启 stream_options.include_usage）通常只在最后一个分片带上 usage，
-// 因此这里取"信息量最大"的那一份。
 func pickUsage(cur *schema.TokenUsage, msg *schema.Message) *schema.TokenUsage {
 	if msg == nil || msg.ResponseMeta == nil || msg.ResponseMeta.Usage == nil {
 		return cur
@@ -51,11 +48,6 @@ type OpenAIModel struct {
 	name string
 }
 
-// deepSeekSettings 解析大模型（OpenAI 兼容）连接配置
-// 来源：环境变量 > 代码默认值
-//   DEEPSEEK_BASE_URL / OPENAI_BASE_URL     默认 https://api.deepseek.com
-//   DEEPSEEK_MODEL_NAME / OPENAI_MODEL_NAME 默认 deepseek-chat
-//   DEEPSEEK_API_KEY / OPENAI_API_KEY       默认空
 func deepSeekSettings() (baseURL, modelName, apiKey string) {
 	baseURL = firstNonEmpty(
 		os.Getenv("DEEPSEEK_BASE_URL"),
@@ -227,7 +219,6 @@ func (o *AliRAGModel) GenerateResponse(ctx context.Context, messages []*schema.M
 	lastMessage := messages[len(messages)-1]
 	query := lastMessage.Content
 
-	// 0. 意图分类：总结全文 / 具体问题 / 闲聊
 	intent := o.classifyIntent(query)
 
 	// --- 总结全文 ---
@@ -432,9 +423,9 @@ func (o *AliRAGModel) extractKeywords(ctx context.Context, query string) []strin
 type intentType int
 
 const (
-	intentSummary intentType = iota // 总结全文
-	intentQuestion                  // 具体问题 → RAG
-	intentChat                      // 闲聊 → 普通对话
+	intentSummary  intentType = iota // 总结全文
+	intentQuestion                   // 具体问题 → RAG
+	intentChat                       // 闲聊 → 普通对话
 )
 
 // classifyIntent 用关键词匹配判断用户意图

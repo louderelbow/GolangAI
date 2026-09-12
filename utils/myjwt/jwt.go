@@ -32,8 +32,7 @@ func GenerateToken(id int64, username string) (string, error) {
 }
 
 // ParseToken 解析Token
-// 注意：jwt.ParseWithClaims 在 token 格式非法时会返回 (nil, err)，
-// 所以必须先判 err/t == nil，否则对畸形 token 会空指针 panic。
+
 func ParseToken(token string) (string, bool) {
 	claims := new(Claims)
 	t, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (interface{}, error) {

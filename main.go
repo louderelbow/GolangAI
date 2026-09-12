@@ -22,7 +22,6 @@ import (
 )
 
 // loadSessionHistory 会话历史按需加载：
-// 会话第一次进入内存时，把它自己的历史从数据库读回来（替代原来"启动时全表加载"）。
 func loadSessionHistory(sessionID string) ([]*model.Message, error) {
 	msgs, err := message.GetMessagesBySessionID(sessionID)
 	if err != nil {

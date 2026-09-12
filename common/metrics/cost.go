@@ -9,10 +9,6 @@ import (
 )
 
 // ======================== 费用计算 ========================
-//
-// 价格来自 config.toml 的 [aiPricing]（元 / 100 万 token）。
-// 例如 DeepSeek：promptPrice.deepseek-chat = 2.0, completionPrice.deepseek-chat = 8.0
-// 未配置的模型用 defaultPromptPrice / defaultCompletionPrice；都没配则费用为 0（token 照常统计）。
 
 // CostMicros 单次请求费用（微元，1 元 = 1,000,000 微元），用整数避免浮点累计误差
 func CostMicros(model string, promptTokens, completionTokens, cachedTokens int) int64 {

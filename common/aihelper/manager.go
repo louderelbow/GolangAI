@@ -13,8 +13,8 @@ var ctx = context.Background()
 
 // 默认的空闲淘汰参数
 const (
-	DefaultIdleTTL        = 30 * time.Minute // 会话空闲多久后从内存释放
-	DefaultJanitorInterval = 5 * time.Minute // 清理协程的执行间隔
+	DefaultIdleTTL         = 30 * time.Minute // 会话空闲多久后从内存释放
+	DefaultJanitorInterval = 5 * time.Minute  // 清理协程的执行间隔
 )
 
 // historyLoader 会话历史加载器：内存里没有该会话时，从数据库把历史读回来
@@ -55,9 +55,6 @@ func NewAIHelperManager() *AIHelperManager {
 }
 
 // GetOrCreateAIHelper 获取或创建AIHelper
-//
-// 注意：真正的创建（建模型 + 读数据库历史）放在锁外执行——
-// 这些操作包含网络与 DB IO，占着全局写锁会让所有用户的会话一起排队。
 func (m *AIHelperManager) GetOrCreateAIHelper(userName string, sessionID string, modelType string, config map[string]interface{}) (*AIHelper, error) {
 	// 快路径：读锁
 	m.mu.RLock()
@@ -124,7 +121,6 @@ func (m *AIHelperManager) GetAIHelper(userName string, sessionID string) (*AIHel
 }
 
 // StartJanitor 启动空闲会话清理协程
-// 没有它的话，helper 会随着"用户数 × 会话数"无限增长，是明确的内存泄漏
 func (m *AIHelperManager) StartJanitor(idleTTL, interval time.Duration) {
 	if idleTTL <= 0 {
 		idleTTL = DefaultIdleTTL
@@ -134,7 +130,6 @@ func (m *AIHelperManager) StartJanitor(idleTTL, interval time.Duration) {
 	}
 
 	go func() {
-		// 先把活跃会话数初始化出来，避免 /metrics 里缺这个 gauge
 		m.reportStats()
 
 		ticker := time.NewTicker(interval)

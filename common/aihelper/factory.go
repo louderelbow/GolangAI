@@ -75,7 +75,6 @@ func (f *AIModelFactory) registerCreators() {
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"
 		}
-		// 允许前端通过 config 指定，否则读环境变量，最后给一个默认本地模型
 		modelName, _ := config["modelName"].(string)
 		if modelName == "" {
 			modelName = os.Getenv("OLLAMA_MODEL_NAME")
@@ -86,11 +85,9 @@ func (f *AIModelFactory) registerCreators() {
 		return NewOllamaModel(ctx, baseURL, modelName)
 	}
 
-		// ReAct Agent
-		f.creators["5"] = func(ctx context.Context, config map[string]interface{}) (AIModel, error) {
-			return NewReActModel(ctx)
-		}
-	// 阿里百炼 mcp 模型
+	f.creators["5"] = func(ctx context.Context, config map[string]interface{}) (AIModel, error) {
+		return NewReActModel(ctx)
+	}
 
 }
 

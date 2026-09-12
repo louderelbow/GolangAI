@@ -34,8 +34,6 @@ type RAGQuery struct {
 }
 
 // 构建知识库索引
-// 专业说法：文本解析、文本切块、向量化、存储向量
-// 通俗理解：把“人能读的文档”，转换成“AI 能按语义搜索的格式”，并存起来
 func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
 
 	// 用于控制整个初始化流程（超时 / 取消等），这里先用默认背景即可
@@ -52,7 +50,6 @@ func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
 	}
 
 	// 向量的维度大小（等于向量模型输出的数字个数）
-	// Redis 在创建向量索引时必须提前知道这个值
 	dimension := conf.RagModelConfig.RagDimension
 
 	// 1. 配置并创建”向量生成器”（Embedding）
@@ -69,11 +66,8 @@ func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
 		return nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
 
-	// ===============================
 	// 2. 初始化 Redis 中的向量索引结构
-	// ===============================
-	// 可以理解为：先在 Redis 里建好“仓库”，
-	// 告诉它以后要存向量，并且每个向量的维度是多少
+
 	if err := redisPkg.InitRedisIndex(ctx, filename, dimension); err != nil {
 		return nil, fmt.Errorf("failed to init redis index: %w", err)
 	}
@@ -81,9 +75,7 @@ func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
 	// 获取 Redis 客户端，用于后续数据写入
 	rdb := redisPkg.Rdb
 
-	// ===============================
 	// 3. 配置索引器（定义：文档如何被存进 Redis）
-	// ===============================
 	indexerConfig := &redisIndexer.IndexerConfig{
 		Client:    rdb,                                        // Redis 客户端
 		KeyPrefix: redisPkg.GenerateIndexNamePrefix(filename), // 不同知识库使用不同前缀，避免冲突
@@ -118,22 +110,14 @@ func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
 	}
 
 	// 将“向量生成器”交给索引器
-	// 这样索引器在写入文本时，可以自动完成向量计算
 	indexerConfig.Embedding = embedder
 
-	// ===============================
 	// 4. 创建最终可用的索引器实例
-	// ===============================
-	// 此时索引器已经具备：
-	// - 文本 → 向量 的能力
-	// - 向量写入 Redis 的能力
 	idx, err := redisIndexer.NewIndexer(ctx, indexerConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create indexer: %w", err)
 	}
 
-	// 返回一个封装好的 RAGIndexer，
-	// 后续只需要调用它，就可以把文档加入知识库
 	return &RAGIndexer{
 		embedding: embedder,
 		indexer:   idx,
@@ -290,8 +274,6 @@ func (r *RAGQuery) keywordSearch(ctx context.Context, query string) []*schema.Do
 		return nil
 	}
 
-	// 用户输入不能直接拼进 RediSearch 查询串：其中的 - | @ ( ) { } [ ] " ' ~ * 等
-	// 都是查询语法字符，会让整条查询报语法错误，检索静默失效（退化成纯向量检索）
 	kwQuery := buildKeywordQuery(query)
 	if kwQuery == "" {
 		return nil

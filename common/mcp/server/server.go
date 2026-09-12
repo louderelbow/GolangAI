@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -182,4 +183,13 @@ func StartServer(httpAddr string) error {
 	httpServer := server.NewStreamableHTTPServer(mcpServer)
 	log.Printf("HTTP MCP server listening on %s/mcp", httpAddr)
 	return httpServer.Start(httpAddr)
+}
+
+// StartStdioServer 以 stdio 传输启动（MCP 客户端把它作为子进程拉起，走标准输入输出通信）
+// 好处：不用暴露端口、不用网络，本地工具用这种方式最省事
+func StartStdioServer(ctx context.Context) error {
+	mcpServer := NewMCPServer()
+	stdioServer := server.NewStdioServer(mcpServer)
+	log.Printf("MCP stdio server started (stdin/stdout)")
+	return stdioServer.Listen(ctx, os.Stdin, os.Stdout)
 }

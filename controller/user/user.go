@@ -10,7 +10,6 @@ import (
 )
 
 type (
-	//这里的Username只能是账号登录，和我做的另一个项目有区别（邮箱账号均可)
 	LoginRequest struct {
 		Username string `json:"username"`
 		Password string `json:"password"`

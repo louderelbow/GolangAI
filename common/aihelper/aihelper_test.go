@@ -17,7 +17,6 @@ import (
 )
 
 // TestMain 指定示例配置文件的绝对路径：
-// 让配置相关代码在测试里也能走通（不依赖测试进程的工作目录）
 func TestMain(m *testing.M) {
 	if _, file, _, ok := runtime.Caller(0); ok {
 		root := filepath.Dir(filepath.Dir(filepath.Dir(file)))

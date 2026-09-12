@@ -1,10 +1,8 @@
 // Package eval 提供 RAG / 回答质量的离线评测框架。
 //
 // 用法：
-//   go run ./cmd/eval -set eval/golden_example.json -user <你的账号>
 //
-// 为什么需要它：改了 prompt / 分片大小 / TopK / 检索策略之后，
-// 只有跑一遍黄金集才知道"到底变好了还是变坏了"，否则只能靠感觉。
+//	go run ./cmd/eval -set eval/golden_example.json -user <账号>
 package eval
 
 import (
@@ -54,19 +52,19 @@ type Metrics struct {
 
 // CaseResult 单条结果
 type CaseResult struct {
-	ID           string        `json:"id"`
-	Question     string        `json:"question"`
-	Answer       string        `json:"answer"`
-	Docs         int           `json:"docs"`
-	DocSnippets  []string      `json:"docSnippets,omitempty"`
-	RetrievalHit bool          `json:"retrievalHit"`
-	Covered      int           `json:"covered"`
-	Expected     int           `json:"expected"`
-	Refused      bool          `json:"refused"`
-	RefusalOK    bool          `json:"refusalOk"`
-	Faithfulness float64       `json:"faithfulness"`
-	LatencyMS    int64         `json:"latencyMs"`
-	Error        string        `json:"error,omitempty"`
+	ID           string   `json:"id"`
+	Question     string   `json:"question"`
+	Answer       string   `json:"answer"`
+	Docs         int      `json:"docs"`
+	DocSnippets  []string `json:"docSnippets,omitempty"`
+	RetrievalHit bool     `json:"retrievalHit"`
+	Covered      int      `json:"covered"`
+	Expected     int      `json:"expected"`
+	Refused      bool     `json:"refused"`
+	RefusalOK    bool     `json:"refusalOk"`
+	Faithfulness float64  `json:"faithfulness"`
+	LatencyMS    int64    `json:"latencyMs"`
+	Error        string   `json:"error,omitempty"`
 }
 
 // Report 评测报告
@@ -100,10 +98,10 @@ func LoadSet(path string) (*Set, error) {
 
 // Options 运行参数
 type Options struct {
-	User      string  // 用哪个账号的文档做 RAG 检索
-	ModelType string  // 默认模型类型
-	TopK      int     // 检索返回条数（0 用默认）
-	Judge     bool    // 是否用 LLM 给"忠实度"打分（会多花 token）
+	User      string // 用哪个账号的文档做 RAG 检索
+	ModelType string // 默认模型类型
+	TopK      int    // 检索返回条数（0 用默认）
+	Judge     bool   // 是否用 LLM 给"忠实度"打分（会多花 token）
 	Verbose   bool
 }
 

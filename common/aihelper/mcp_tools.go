@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -62,9 +65,12 @@ func (s *mcpServer) ensureClient(ctx context.Context) (*client.Client, error) {
 
 	case s.command != "":
 		// 本地子进程：stdio（社区工具大多是 npx/uvx 启动的）
-		c, err = client.NewStdioMCPClient(s.command, s.env, s.args...)
+		// Windows 上 npx/uvx 实际是可执行脚本（npx.cmd / uvx.exe），
+		// 直接 exec "npx" 会报 "不是有效的 Win32 应用程序"，这里做一次兜底解析
+		cmd := resolveCommand(s.command)
+		c, err = client.NewStdioMCPClient(cmd, s.env, s.args...)
 		if err != nil {
-			return nil, fmt.Errorf("start stdio server %s (%s) failed: %w", s.name, s.command, err)
+			return nil, fmt.Errorf("start stdio server %s (%s) failed: %w", s.name, cmd, err)
 		}
 
 	default:
@@ -112,6 +118,7 @@ type MCPRegistry struct {
 // emptyRetryInterval 一次都没拉到工具时的重试间隔：
 // 否则"启动时 MCP 服务没起来"会被永久缓存，之后必须重启后端才能用上工具
 const emptyRetryInterval = 60 * time.Second
+const mcpServerTimeout = 15 * time.Second
 
 var (
 	globalMCPRegistry *MCPRegistry
@@ -150,6 +157,19 @@ func GetMCPRegistry() *MCPRegistry {
 		globalMCPRegistry = &MCPRegistry{servers: servers}
 	})
 	return globalMCPRegistry
+}
+
+// resolveCommand 解析 stdio 启动命令
+func resolveCommand(cmd string) string {
+	if runtime.GOOS != "windows" || filepath.Ext(cmd) != "" {
+		return cmd
+	}
+	for _, ext := range []string{".cmd", ".bat", ".exe"} {
+		if p, err := exec.LookPath(cmd + ext); err == nil {
+			return p
+		}
+	}
+	return cmd
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -203,14 +223,17 @@ func (r *MCPRegistry) load(ctx context.Context) {
 	var lastErr error
 
 	for _, srv := range r.servers {
-		c, err := srv.ensureClient(ctx)
+		loadCtx, cancel := context.WithTimeout(ctx, mcpServerTimeout)
+		c, err := srv.ensureClient(loadCtx)
 		if err != nil {
+			cancel()
 			lastErr = err
 			log.Printf("[MCP] server %s unavailable: %v", srv.name, err)
 			continue
 		}
 
-		res, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+		res, err := c.ListTools(loadCtx, mcp.ListToolsRequest{})
+		cancel()
 		if err != nil {
 			lastErr = err
 			log.Printf("[MCP] list tools from %s failed: %v", srv.name, err)
@@ -281,10 +304,15 @@ func (t *mcpTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts
 		}
 	}
 
+	// 工具调用必须留痕：否则"模型没调工具、自己编答案"这种情况完全看不出来
+	start := time.Now()
+	log.Printf("[MCP] CALL tool=%s args=%s", t.name, truncate(argumentsInJSON, 200))
+
 	res, err := t.client.CallTool(ctx, mcp.CallToolRequest{
 		Params: mcp.CallToolParams{Name: t.origin, Arguments: args},
 	})
 	if err != nil {
+		log.Printf("[MCP] tool=%s failed after %s: %v", t.name, time.Since(start).Round(time.Millisecond), err)
 		return "", fmt.Errorf("mcp call %s failed: %w", t.origin, err)
 	}
 
@@ -296,14 +324,23 @@ func (t *mcpTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts
 		}
 	}
 	out := strings.TrimSpace(sb.String())
+	log.Printf("[MCP] tool=%s done in %s, result=%d chars", t.name, time.Since(start).Round(time.Millisecond), len(out))
+
 	if res.IsError {
 		return out, fmt.Errorf("tool %s returned error: %s", t.origin, out)
 	}
 	return out, nil
 }
 
+// truncate 日志截断，避免把整段参数写进日志
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 // toolInfoFromMCP 把 MCP 的 JSON Schema 参数转换成 eino 的 ToolInfo
-// 覆盖常见的 string/integer/number/boolean/array/object；无法识别的按 string 处理
 func toolInfoFromMCP(name string, t mcp.Tool) *schema.ToolInfo {
 	params := make(map[string]*schema.ParameterInfo, len(t.InputSchema.Properties))
 	for propName, raw := range t.InputSchema.Properties {

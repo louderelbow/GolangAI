@@ -28,7 +28,6 @@ func GenerateMessageMQParam(sessionID string, content string, userName string, I
 }
 
 // PublishOrPersist 优先走 MQ 异步落库；MQ 不可用或投递失败时退化为同步写库
-// 这样"消息不丢"才是真的：不会因为 MQ 挂了/重启而丢掉聊天记录
 func PublishOrPersist(data []byte) error {
 	if RMQMessage != nil {
 		if err := RMQMessage.Publish(data); err == nil {
