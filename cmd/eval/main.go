@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"deeptalk/common/aihelper"
 	"deeptalk/common/metrics"
 	"deeptalk/common/mysql"
 	"deeptalk/common/redis"
@@ -25,24 +26,30 @@ func main() {
 	user := flag.String("user", "", "用哪个账号的文档做检索（必填）")
 	modelType := flag.String("type", "2", "模型类型：1DeepSeek 2RAG 3MCP 4Ollama 5ReAct")
 	judge := flag.Bool("judge", false, "额外用 LLM 给忠实度打分（更慢、更贵）")
+	intentOnly := flag.Bool("intentOnly", false, "只评测意图识别（规则层，本地零成本，秒级返回）")
+	intentLLM := flag.Bool("intentLLM", false, "意图评测时对低置信度用例调用真实模型跑兜底（少量调用）")
 	verbose := flag.Bool("v", true, "打印每条用例的明细")
 	out := flag.String("json", "", "把完整报告写到指定 JSON 文件")
 	timeout := flag.Duration("timeout", 10*time.Minute, "整体超时")
 	flag.Parse()
 
-	if *user == "" {
+	// 只评测意图时不需要账号/文档，也不需要连 MySQL
+	if *user == "" && !*intentOnly {
 		fmt.Fprintln(os.Stderr, "缺少 -user 参数（评测需要指定一个账号来读取它的知识库文档）")
 		flag.Usage()
 		os.Exit(2)
 	}
 
-	// 与线上一致的初始化顺序
 	config.GetConfig()
-	if err := mysql.InitMysql(); err != nil {
-		log.Fatalf("InitMysql failed: %v", err)
-	}
-	redis.Init()
 	metrics.RegisterHelp()
+
+	if !*intentOnly {
+		// 与线上一致的初始化顺序（意图评测不需要 DB/Redis）
+		if err := mysql.InitMysql(); err != nil {
+			log.Fatalf("InitMysql failed: %v", err)
+		}
+		redis.Init()
+	}
 
 	set, err := eval.LoadSet(*setPath)
 	if err != nil {
@@ -58,11 +65,64 @@ func main() {
 
 	start := time.Now()
 	report := eval.Run(ctx, set, eval.Options{
-		User:      *user,
-		ModelType: *modelType,
-		Judge:     *judge,
-		Verbose:   *verbose,
+		User:       *user,
+		ModelType:  *modelType,
+		Judge:      *judge,
+		Verbose:    *verbose,
+		IntentOnly: *intentOnly,
+		IntentLLM:  *intentLLM,
 	})
+
+	// ---- 意图识别评测：先用规则层（本地零成本），可选再用真实模型跑兜底 ----
+	if *intentLLM && report.Intent != nil {
+		llm, err := aihelper.NewIntentLLM(ctx)
+		if err != nil {
+			log.Printf("构造意图兜底模型失败: %v", err)
+		} else {
+			fmt.Printf("\n>>> 对低置信度用例调用真实模型跑兜底...\n")
+			report.Intent.ApplyLLMFallback(ctx, llm)
+			report.Metrics.IntentAccuracy = report.Intent.LLMAccuracy
+		}
+	}
+
+	if report.Intent != nil && report.Intent.Total > 0 {
+		ie := report.Intent
+		fmt.Printf("\n=== 意图识别评测（规则层，不调模型）===\n")
+		fmt.Printf("标注用例    : %d（正确 %d）\n", ie.Total, ie.Correct)
+		fmt.Printf("准确率      : %.2f  （重构前旧规则 %.2f，提升了 %.0f 个百分点）\n", ie.Accuracy, ie.LegacyAccuracy, (ie.Accuracy-ie.LegacyAccuracy)*100)
+		fmt.Printf("低置信占比  : %.2f  (%d/%d，这部分线上会走 LLM 兜底)\n", ie.LowConfRate, ie.LowConf, ie.Total)
+		if ie.LLMAccuracy > 0 {
+			fmt.Printf("加入 LLM 兜底后准确率: %.2f  （%d/%d）\n", ie.LLMAccuracy, ie.LLMCorrect, ie.Total)
+		}
+		fmt.Printf("\n混淆矩阵（行=期望，列=预测）:\n%s", ie.Matrix())
+		fmt.Printf("\n分类别指标:\n")
+		for _, label := range []string{"summary", "question", "chat"} {
+			m, ok := ie.PerClass[label]
+			if !ok || m.Support == 0 {
+				continue
+			}
+			fmt.Printf("  %-9s P=%.2f R=%.2f F1=%.2f (支撑=%d)\n", label, m.Precision, m.Recall, m.F1, m.Support)
+		}
+		if len(ie.Wrong) > 0 {
+			fmt.Printf("\n判错的用例 (%d 条):\n", len(ie.Wrong))
+			for _, w := range ie.Wrong {
+				fmt.Printf("  [%s] 期望=%s 实际=%s | %s | %s\n", w.ID, w.Expected, w.Predicted, w.Question, w.Reason)
+			}
+		}
+	}
+
+	if *intentOnly {
+		fmt.Printf("\n（-intentOnly：已跳过检索与生成评测）\n")
+		if *out != "" {
+			if err := eval.SaveJSON(report, *out); err != nil {
+				log.Printf("写报告失败: %v", err)
+			}
+		}
+		if report.Intent != nil && report.Intent.Accuracy < 0.8 {
+			os.Exit(1)
+		}
+		return
+	}
 
 	fmt.Printf("\n=== 评测结果 ===\n")
 	fmt.Printf("用例数      : %d（失败 %d）\n", report.Total, report.Failed)

@@ -5,6 +5,7 @@ import (
 	"deeptalk/common/code"
 	myredis "deeptalk/common/redis"
 	"deeptalk/common/resilience"
+	"deeptalk/config"
 	"deeptalk/controller"
 	"log"
 	"net/http"
@@ -16,13 +17,10 @@ import (
 
 // ======================== Token Bucket 限流中间件 ========================
 
+// 桶的容量与补充速率来自配置 [rateLimit]（默认 10 / 2，与原硬编码值一致）；
+// 压测时可在 config.toml 里把 rateLimit.enabled 设为 false 临时关闭。
 const (
-	rateLimitCapacity  = 10 // 桶容量（突发峰值允许 10 个请求）
-	rateLimitRefill    = 2  // 每秒补充 token 数
-	rateLimitKeyPrefix = "ratelimit:"
-
-	ipRateLimitCapacity  = 5   // 未登录接口按 IP 限流：桶容量
-	ipRateLimitRefill    = 0.2 // 每 5 秒补充 1 个
+	rateLimitKeyPrefix   = "ratelimit:"
 	ipRateLimitKeyPrefix = "ratelimit:ip:"
 )
 
@@ -34,7 +32,12 @@ type bucketState struct {
 
 // RateLimit 返回一个 gin 限流中间件（按登录用户）
 func RateLimit() gin.HandlerFunc {
-	limiter := newTokenBucket(rateLimitCapacity, rateLimitRefill, rateLimitKeyPrefix)
+	cfg := config.GetConfig().GetRateLimit()
+	if !cfg.IsEnabled() {
+		log.Printf("[RateLimit] 限流已关闭（rateLimit.enabled=false），仅应在压测时使用")
+		return func(c *gin.Context) { c.Next() }
+	}
+	limiter := newTokenBucket(float64(cfg.Capacity), float64(cfg.Refill), rateLimitKeyPrefix)
 
 	return func(c *gin.Context) {
 		// 从 JWT 中间件注入的 context 中获取用户名
@@ -59,7 +62,11 @@ func RateLimit() gin.HandlerFunc {
 
 // RateLimitByIP 按客户端 IP 限流（用于未登录接口，防刷验证码/暴力破解密码）
 func RateLimitByIP() gin.HandlerFunc {
-	limiter := newTokenBucket(ipRateLimitCapacity, ipRateLimitRefill, ipRateLimitKeyPrefix)
+	cfg := config.GetConfig().GetRateLimit()
+	if !cfg.IsEnabled() {
+		return func(c *gin.Context) { c.Next() }
+	}
+	limiter := newTokenBucket(float64(cfg.IPCapacity), float64(cfg.IPRefill), ipRateLimitKeyPrefix)
 
 	return func(c *gin.Context) {
 		if !limiter.allow(c.Request.Context(), c.ClientIP()) {

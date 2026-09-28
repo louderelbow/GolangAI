@@ -28,3 +28,15 @@ Thumbs.db
 
 # 配置文件（真实配置不上传，请复制 config.toml.example 为 config.toml 后填写）
 config/config.toml
+
+# 压测产出的临时数据（测试账号 token / 会话 ID）与本地构建缓存
+stress/users.json
+stress/.tmp/
+stress/*.log
+stress/*.prof
+*.prof
+# 压测结果目录要保留在仓库里（k6 的 handleSummary 不会自动建目录，
+# 目录不存在会导致压测跑完后写结果失败），所以忽略内容但保留 .gitkeep
+stress/results/*
+!stress/results/.gitkeep
+.gocache/

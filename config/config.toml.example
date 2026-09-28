@@ -112,3 +112,28 @@ minRequests = 10
 timeoutSeconds = 30            # open 持续 30 秒后进入 half-open 试探
 maxRequestsHalfOpen = 3        # half-open 允许的试探请求数
 intervalSeconds = 60           # 关闭态计数窗口滚动周期
+
+# ============ 意图识别（分层：规则层 + LLM 兜底）============
+# 规则层（加权词表 + 整词匹配 + 指代/疑问词守卫）永远生效且零成本；
+# llmFallback 开启后，规则层"不确定"的少量请求（实测约 7%）才用 LLM 做结构化分类
+[intentConfig]
+llmFallback = true
+cacheTTLSeconds = 600          # 同一问题在此时间内只判一次
+maxCacheEntries = 1000
+
+# ============ 限流（令牌桶）============
+# 不配这一段时用默认值，行为与历史一致：单用户 10 容量 / 每秒补 2 个（≈2 QPS）。
+# 压测时把 enabled 设为 false 临时关掉，压完务必改回 true。
+[rateLimit]
+enabled = true
+capacity = 10                  # 单用户桶容量（突发允许几个请求）
+refill = 2                     # 单用户每秒补充 token 数
+ipCapacity = 5                 # 未登录接口按 IP：桶容量
+ipRefill = 0.2                 # 未登录接口按 IP：每 5 秒补 1 个
+
+# ============ 诊断端点（压测 / 排查用）============
+# 打开后会启动 pprof 服务，并开启 goroutine / heap / block / mutex 采样。
+# 采样有开销，且 pprof 能 dump 出完整堆栈，生产环境务必保持 false。
+[debug]
+pprofEnabled = false
+pprofAddr = "127.0.0.1:6060"   # 只监听本机；要远程看请走 SSH 隧道

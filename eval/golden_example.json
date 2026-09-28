@@ -10,135 +10,372 @@
     {
       "id": "annual-001",
       "question": "年假有多少天？",
-      "expectPoints": ["7"],
-      "expectSources": ["年假"],
-      "expectRefusal": false
+      "expectPoints": [
+        "7"
+      ],
+      "expectSources": [
+        "年假"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "annual-002",
       "question": "年假需要提前多久申请？",
-      "expectPoints": ["3"],
-      "expectSources": ["年假", "提前"],
-      "expectRefusal": false
+      "expectPoints": [
+        "3"
+      ],
+      "expectSources": [
+        "年假",
+        "提前"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "leave-001",
       "question": "迟到多久算旷工？",
-      "expectPoints": ["30", "半天"],
-      "expectSources": ["迟到"],
-      "expectRefusal": false
+      "expectPoints": [
+        "30",
+        "半天"
+      ],
+      "expectSources": [
+        "迟到"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "leave-002",
       "question": "病假需要提供什么材料？",
-      "expectPoints": ["医院证明"],
-      "expectSources": ["病假"],
-      "expectRefusal": false
+      "expectPoints": [
+        "医院证明"
+      ],
+      "expectSources": [
+        "病假"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "leave-003",
       "question": "事假怎么扣工资？",
-      "expectPoints": ["扣"],
-      "expectSources": ["事假"],
-      "expectRefusal": false
+      "expectPoints": [
+        "扣"
+      ],
+      "expectSources": [
+        "事假"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "expense-001",
       "question": "差旅费需要在多久内提交报销？",
-      "expectPoints": ["7"],
-      "expectSources": ["报销", "差旅"],
-      "expectRefusal": false
+      "expectPoints": [
+        "7"
+      ],
+      "expectSources": [
+        "报销",
+        "差旅"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "expense-002",
       "question": "单笔超过 500 元的报销需要谁签字？",
-      "expectPoints": ["部门经理"],
-      "expectSources": ["500"],
-      "expectRefusal": false
+      "expectPoints": [
+        "部门经理"
+      ],
+      "expectSources": [
+        "500"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "expense-003",
       "question": "超过 2000 元的报销需要谁签字？",
-      "expectPoints": ["总经理"],
-      "expectSources": ["2000"],
-      "expectRefusal": false
+      "expectPoints": [
+        "总经理"
+      ],
+      "expectSources": [
+        "2000"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "expense-004",
       "question": "电子发票要怎么提交？",
-      "expectPoints": ["打印"],
-      "expectSources": ["电子发票"],
-      "expectRefusal": false
+      "expectPoints": [
+        "打印"
+      ],
+      "expectSources": [
+        "电子发票"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "overtime-001",
       "question": "工作日加班费是几倍工资？",
-      "expectPoints": ["1.5"],
-      "expectSources": ["加班"],
-      "expectRefusal": false
+      "expectPoints": [
+        "1.5"
+      ],
+      "expectSources": [
+        "加班"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "overtime-002",
       "question": "法定节假日加班费怎么算？",
-      "expectPoints": ["3"],
-      "expectSources": ["法定节假日"],
-      "expectRefusal": false
+      "expectPoints": [
+        "3"
+      ],
+      "expectSources": [
+        "法定节假日"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "overtime-003",
       "question": "加班需要提前做什么？",
-      "expectPoints": ["OA"],
-      "expectSources": ["加班"],
-      "expectRefusal": false
+      "expectPoints": [
+        "OA"
+      ],
+      "expectSources": [
+        "加班"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "resign-001",
       "question": "正式员工离职需要提前多久申请？",
-      "expectPoints": ["30"],
-      "expectSources": ["离职"],
-      "expectRefusal": false
+      "expectPoints": [
+        "30"
+      ],
+      "expectSources": [
+        "离职"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "resign-002",
       "question": "试用期员工离职需要提前几天？",
-      "expectPoints": ["6"],
-      "expectSources": ["试用期"],
-      "expectRefusal": false
+      "expectPoints": [
+        "6"
+      ],
+      "expectSources": [
+        "试用期"
+      ],
+      "expectRefusal": false,
+      "expectIntent": "question"
     },
     {
       "id": "summary-001",
       "question": "总结一下这份文档的全部内容",
-      "expectPoints": ["请假", "报销", "加班", "离职"],
+      "expectPoints": [
+        "请假",
+        "报销",
+        "加班",
+        "离职"
+      ],
       "expectSources": [],
-      "expectRefusal": false
+      "expectRefusal": false,
+      "expectIntent": "summary"
     },
     {
       "id": "refuse-001",
       "question": "公司年会在哪一天举办？预算多少？",
       "expectPoints": [],
       "expectSources": [],
-      "expectRefusal": true
+      "expectRefusal": true,
+      "expectIntent": "question"
     },
     {
       "id": "refuse-002",
       "question": "帮我写一段 Python 快速排序代码",
       "expectPoints": [],
       "expectSources": [],
-      "expectRefusal": true
+      "expectRefusal": true,
+      "expectIntent": "question"
     },
     {
       "id": "refuse-003",
       "question": "公司有多少员工？平均工资是多少？",
       "expectPoints": [],
       "expectSources": [],
-      "expectRefusal": true
+      "expectRefusal": true,
+      "expectIntent": "question"
     },
     {
       "id": "chat-001",
       "question": "你好",
       "expectPoints": [],
       "expectSources": [],
+      "expectRefusal": false,
+      "expectIntent": "chat"
+    },
+    {
+      "question": "This policy is about annual leave",
+      "expectRefusal": false,
+      "expectPoints": [],
+      "expectIntent": "question",
+      "expectSources": [],
+      "id": "intent-adv-001"
+    },
+    {
+      "question": "which one is correct",
+      "expectRefusal": false,
+      "expectPoints": [],
+      "expectIntent": "question",
+      "expectSources": [],
+      "id": "intent-adv-002"
+    },
+    {
+      "question": "年假怎么样申请",
+      "expectRefusal": false,
+      "expectPoints": [
+        "3"
+      ],
+      "expectIntent": "question",
+      "expectSources": [
+        "年假"
+      ],
+      "id": "intent-adv-003"
+    },
+    {
+      "question": "你好请问年假几天",
+      "expectRefusal": false,
+      "expectPoints": [
+        "7"
+      ],
+      "expectIntent": "question",
+      "expectSources": [
+        "年假"
+      ],
+      "id": "intent-adv-004"
+    },
+    {
+      "question": "那它呢",
+      "expectRefusal": false,
+      "expectPoints": [],
+      "expectIntent": "question",
+      "expectSources": [],
+      "id": "intent-adv-005"
+    },
+    {
+      "question": "谢谢",
+      "expectRefusal": false,
+      "expectPoints": [],
+      "expectIntent": "chat",
+      "expectSources": [],
+      "id": "intent-adv-006"
+    },
+    {
+      "question": "这份制度讲了什么",
+      "expectRefusal": false,
+      "expectPoints": [
+        "请假",
+        "报销"
+      ],
+      "expectIntent": "summary",
+      "expectSources": [],
+      "id": "intent-adv-007"
+    },
+    {
+      "expectIntent": "chat",
+      "expectSources": [],
+      "question": "谢谢你的说明我们稍后再讨论细节",
+      "id": "intent-amb-001",
+      "expectPoints": [],
       "expectRefusal": false
+    },
+    {
+      "expectIntent": "question",
+      "expectSources": [
+        "年假"
+      ],
+      "question": "你好我想了解一下年假制度的相关规定",
+      "id": "intent-amb-002",
+      "expectPoints": [
+        "年假"
+      ],
+      "expectRefusal": false
+    },
+    {
+      "expectIntent": "chat",
+      "expectSources": [],
+      "question": "嗯嗯好的我知道了",
+      "id": "intent-amb-003",
+      "expectPoints": [],
+      "expectRefusal": false
+    },
+    {
+      "expectIntent": "chat",
+      "expectPoints": [],
+      "expectRefusal": false,
+      "expectSources": [],
+      "question": "你是RAG模型吗",
+      "id": "intent-meta-001"
+    },
+    {
+      "expectIntent": "chat",
+      "expectPoints": [],
+      "expectRefusal": false,
+      "expectSources": [],
+      "question": "你是什么模型",
+      "id": "intent-meta-002"
+    },
+    {
+      "expectIntent": "chat",
+      "expectPoints": [],
+      "expectRefusal": false,
+      "expectSources": [],
+      "question": "你会画画吗",
+      "id": "intent-meta-003"
+    },
+    {
+      "expectIntent": "question",
+      "expectPoints": [
+        "7"
+      ],
+      "expectRefusal": false,
+      "expectSources": [
+        "年假"
+      ],
+      "question": "你能帮我查一下年假吗",
+      "id": "intent-meta-004"
+    },
+    {
+      "expectPoints": [
+        "7"
+      ],
+      "expectIntent": "question",
+      "question": "总结一下员工放假几天",
+      "id": "intent-sum-001",
+      "expectRefusal": false,
+      "expectSources": [
+        "年假"
+      ]
+    },
+    {
+      "expectPoints": [
+        "请假",
+        "报销"
+      ],
+      "expectIntent": "summary",
+      "question": "总结一下这份文档",
+      "id": "intent-sum-002",
+      "expectRefusal": false,
+      "expectSources": []
     }
   ]
 }

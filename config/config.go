@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 
@@ -163,6 +164,94 @@ type Config struct {
 	SemanticCache      SemanticCacheConfig `toml:"semanticCache"`
 	McpConfig          `toml:"mcpConfig"`
 	ResilienceConfig   `toml:"resilience"`
+	IntentConfig       `toml:"intentConfig"`
+	RateLimitConfig    `toml:"rateLimit"`
+	DebugConfig        `toml:"debug"`
+}
+
+// TolerantFloat 兼容 TOML 里把浮点字段写成整数的写法。
+//
+// BurntSushi/toml 不会把 `capacity = 10` 隐式转成 float64，会直接报
+// "cannot load TOML value of type int64 into a Go float" 然后 log.Fatal，
+// 而限流的容量/速率天然就是整数写法，用户几乎必然会踩。
+// 用这个类型让 10 和 10.0 都能解析。
+type TolerantFloat float64
+
+func (t *TolerantFloat) UnmarshalTOML(v any) error {
+	switch n := v.(type) {
+	case int64:
+		*t = TolerantFloat(n)
+	case float64:
+		*t = TolerantFloat(n)
+	default:
+		return fmt.Errorf("期望数字，实际是 %T", v)
+	}
+	return nil
+}
+
+// RateLimitConfig 限流配置（按用户 / 按 IP 的令牌桶）
+// 默认值与历史硬编码值完全一致，不配置时行为不变。
+// 压测前把 enabled 设成 false（或把 refill 调大），压完务必改回来。
+type RateLimitConfig struct {
+	// Enabled 用指针是为了区分"没配置"（默认开启）和"显式配置成 false"（关闭）
+	Enabled    *bool         `toml:"enabled"`
+	Capacity   TolerantFloat `toml:"capacity"`   // 单用户桶容量
+	Refill     TolerantFloat `toml:"refill"`     // 单用户每秒补充 token 数（= 平均 QPS 上限）
+	IPCapacity TolerantFloat `toml:"ipCapacity"` // 未登录接口按 IP：桶容量
+	IPRefill   TolerantFloat `toml:"ipRefill"`   // 未登录接口按 IP：每秒补充
+}
+
+func (c RateLimitConfig) withDefaults() RateLimitConfig {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if c.Capacity <= 0 {
+		c.Capacity = 10
+	}
+	if c.Refill <= 0 {
+		c.Refill = 2
+	}
+	if c.IPCapacity <= 0 {
+		c.IPCapacity = 5
+	}
+	if c.IPRefill <= 0 {
+		c.IPRefill = 0.2
+	}
+	return c
+}
+
+// IsEnabled 限流是否开启（未配置时默认开启）
+func (c RateLimitConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+// GetRateLimit 返回填好默认值的限流配置
+func (c *Config) GetRateLimit() RateLimitConfig { return c.RateLimitConfig.withDefaults() }
+
+// DebugConfig 诊断端点配置
+// PprofEnabled 打开后会暴露 /debug/pprof，并开启 CPU/阻塞/互斥锁采样——
+// 采样本身有开销，所以默认关闭；生产环境只在排查问题时临时打开。
+type DebugConfig struct {
+	PprofEnabled bool   `toml:"pprofEnabled"`
+	PprofAddr    string `toml:"pprofAddr"` // 默认 127.0.0.1:6060（只监听本机）
+}
+
+func (c DebugConfig) withDefaults() DebugConfig {
+	if c.PprofAddr == "" {
+		c.PprofAddr = "127.0.0.1:6060"
+	}
+	return c
+}
+
+// GetDebug 返回填好默认值的诊断配置
+func (c *Config) GetDebug() DebugConfig { return c.DebugConfig.withDefaults() }
+
+// IntentConfig 意图识别配置
+// 规则层（加权词表 + 整词匹配 + 指代词守卫）永远生效且零成本；
+// LLMFallback 控制"规则层不确定时是否调用 LLM 做结构化兜底"（会产生额外调用与费用）
+type IntentConfig struct {
+	LLMFallback     bool `toml:"llmFallback"`
+	CacheTTLSeconds int  `toml:"cacheTTLSeconds"`
+	MaxCacheEntries int  `toml:"maxCacheEntries"`
 }
 
 // GetResilience 返回填好默认值的熔断配置

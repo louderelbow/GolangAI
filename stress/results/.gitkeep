@@ -1,0 +1,7 @@
+# 这个文件存在只是为了让 stress/results/ 目录进入仓库。
+#
+# 原因：k6 脚本的 handleSummary 会把结果写到 stress/results/<场景>-<时间>.json，
+# 但 k6 不会自动创建父目录——目录不存在时压测能跑完，但结尾会报
+# "Could not save some summary information ... The system cannot find the path specified"。
+#
+# 本目录下的压测结果文件都被 .gitignore 忽略，只有这个占位文件会提交。

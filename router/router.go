@@ -13,6 +13,10 @@ func InitRouter() *gin.Engine {
 	logger.Init("info")
 	metrics.RegisterHelp()
 
+	// gin 的访问日志也走异步输出：必须在 gin.Default() 之前设置
+	// （gin.Default() 里的 Logger 中间件会在创建时捕获 DefaultWriter）
+	gin.DefaultWriter = logger.Output()
+
 	r := gin.Default()
 	r.Use(mw.RequestID())
 

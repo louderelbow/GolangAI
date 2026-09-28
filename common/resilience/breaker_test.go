@@ -123,3 +123,36 @@ func TestCanceledContextNotCountedAsFailure(t *testing.T) {
 		t.Fatal("context.Canceled 不应触发熔断")
 	}
 }
+
+// 下游"超时"必须算失败，而且要能把熔断器打到 open。
+//
+// 回归用例：早期实现里 IsSuccessful 把 context.DeadlineExceeded 也当成成功，
+// 结果 Redis 连接超时（go-redis 返回的错误满足 errors.Is(err, context.DeadlineExceeded)）
+// 永远不计数，熔断器始终 closed，每个请求都要白等一个完整的 2 秒超时。
+func TestDeadlineExceededCountsAsFailure(t *testing.T) {
+	cfg := config.GetConfig()
+	cfg.ResilienceConfig.Disabled = false
+	cfg.ResilienceConfig.FailureThreshold = 3
+	cfg.ResilienceConfig.FailureRatio = 1
+	cfg.ResilienceConfig.MinRequests = 1000
+	cfg.ResilienceConfig.TimeoutSeconds = 30
+	cfg.ResilienceConfig.MaxRequestsHalfOpen = 1
+	t.Cleanup(func() { cfg.ResilienceConfig = config.ResilienceConfig{} })
+
+	name := "test:deadline-exceeded"
+	calls := 0
+	timeout := func() (int, error) { calls++; return 0, context.DeadlineExceeded }
+
+	for i := 0; i < 3; i++ {
+		if _, err := Do(name, timeout); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("第 %d 次应返回原始超时错误，实际 %v", i+1, err)
+		}
+	}
+
+	if _, err := Do(name, timeout); !IsOpen(err) {
+		t.Fatalf("连续超时 3 次后熔断应打开，实际 err=%v，state=%s", err, States()[name])
+	}
+	if calls != 3 {
+		t.Fatalf("熔断打开后不应再调用下游，实际调用次数=%d", calls)
+	}
+}

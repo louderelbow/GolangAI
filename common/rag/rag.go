@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	embeddingArk "github.com/cloudwego/eino-ext/components/embedding/ark"
 	redisIndexer "github.com/cloudwego/eino-ext/components/indexer/redis"
 	redisRetriever "github.com/cloudwego/eino-ext/components/retriever/redis"
 	"github.com/cloudwego/eino/components/embedding"
@@ -33,37 +32,28 @@ type RAGQuery struct {
 	rdb       *redisCli.Client
 }
 
-// 构建知识库索引
-func NewRAGIndexer(filename, embeddingModel string) (*RAGIndexer, error) {
+// NewRAGIndexer 构建知识库索引。
+//
+// 注意：向量模型固定取 ragModelConfig.embeddingModel（走进程内共享的 embedding 客户端），
+// 不再由调用方传入——传进来的模型名如果和配置不一致，会导致"建索引用 A 模型、
+// 查询用 B 模型"，检索结果毫无意义，索性去掉这个参数避免误用。
+func NewRAGIndexer(filename string) (*RAGIndexer, error) {
 
 	// 用于控制整个初始化流程（超时 / 取消等），这里先用默认背景即可
 	ctx := context.Background()
 
 	// 从配置读取 Embedding API Key
 	conf := config.GetConfig()
-	apiKey := conf.RagModelConfig.RagApiKey
-	if apiKey == "" {
-		apiKey = os.Getenv("ALIYUN_API_KEY")
-	}
-	if apiKey == "" {
-		apiKey = os.Getenv("DEEPSEEK_API_KEY")
-	}
 
 	// 向量的维度大小（等于向量模型输出的数字个数）
 	dimension := conf.RagModelConfig.RagDimension
 
-	// 1. 配置并创建”向量生成器”（Embedding）
-	embedConfig := &embeddingArk.EmbeddingConfig{
-		BaseURL: conf.RagModelConfig.RagBaseUrl, // 向量模型服务地址
-		APIKey:  apiKey,                         // 鉴权信息
-		Model:   embeddingModel,                 // 使用哪个向量模型
-	}
-
-	// 创建向量生成器实例
-	// 后续所有文本的“向量化”都会通过它完成
-	embedder, err := embeddingArk.NewEmbedder(ctx, embedConfig)
+	// 1. 复用进程内共享的"向量生成器"（Embedding）
+	// 每次新建都很贵：内部会读 volcengine 的 ini 配置文件，而且新 client 意味着
+	// 新的连接池、HTTP keep-alive 失效。详见 client.go 的说明。
+	embedder, err := SharedEmbedder()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create embedder: %w", err)
+		return nil, err
 	}
 
 	// 2. 初始化 Redis 中的向量索引结构
@@ -152,26 +142,23 @@ func DeleteIndex(ctx context.Context, filename string) error {
 	return nil
 }
 
-// NewRAGQuery 创建 RAG 查询器（用于向量检索和问答）
+// NewRAGQuery 创建（或复用）RAG 查询器。
+//
+// 按用户名缓存：构建过程有磁盘 IO（读 uploads/<用户名>/ 找文件名）和客户端创建，
+// 每个请求重建一次的代价在 CPU profile 里占了 20%+。缓存在用户重新上传文档时由
+// InvalidateUser 失效。
 func NewRAGQuery(ctx context.Context, username string) (*RAGQuery, error) {
-	cfg := config.GetConfig()
-	apiKey := cfg.RagModelConfig.RagApiKey
-	if apiKey == "" {
-		apiKey = os.Getenv("ALIYUN_API_KEY")
-	}
-	if apiKey == "" {
-		apiKey = os.Getenv("DEEPSEEK_API_KEY")
-	}
+	return cachedRAGQuery(username, func() (*RAGQuery, error) {
+		return buildRAGQuery(ctx, username)
+	})
+}
 
-	// 创建 embedding 模型
-	embedConfig := &embeddingArk.EmbeddingConfig{
-		BaseURL: cfg.RagModelConfig.RagBaseUrl,
-		APIKey:  apiKey,
-		Model:   cfg.RagModelConfig.RagEmbeddingModel,
-	}
-	embedder, err := embeddingArk.NewEmbedder(ctx, embedConfig)
+// buildRAGQuery 真正构建 RAGQuery（缓存未命中时才会走到这里）
+func buildRAGQuery(ctx context.Context, username string) (*RAGQuery, error) {
+	// 复用进程内共享的 embedding 客户端（建一次要读 volcengine 的 ini 配置）
+	embedder, err := SharedEmbedder()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create embedder: %w", err)
+		return nil, err
 	}
 
 	// 获取用户上传的文件名（假设每个用户只有一个文件）
@@ -245,24 +232,28 @@ func (r *RAGQuery) RetrieveDocuments(ctx context.Context, query string) ([]*sche
 		log.Printf("[RAG] vector retrieve failed: %v, fallback to keyword only", err)
 		vecDocs = nil
 	}
-	log.Printf("[RAG] vector retrieve: %d docs", len(vecDocs))
 
 	// 2. 关键词检索
 	kwDocs := r.keywordSearch(ctx, query)
-	log.Printf("[RAG] keyword retrieve: %d docs", len(kwDocs))
 
 	// 3. RRF 融合排序
 	var finalDocs []*schema.Document
-	if len(vecDocs) > 0 && len(kwDocs) > 0 {
+	mode := "rrf"
+	switch {
+	case len(vecDocs) > 0 && len(kwDocs) > 0:
 		finalDocs = rrf(vecDocs, kwDocs, 60)
-		log.Printf("[RAG] RRF fused: vector=%d keyword=%d -> final=%d", len(vecDocs), len(kwDocs), len(finalDocs))
-	} else if len(vecDocs) > 0 {
+	case len(vecDocs) > 0:
 		finalDocs = vecDocs
-		log.Printf("[RAG] keyword returned 0, using vector only: %d docs", len(finalDocs))
-	} else {
+		mode = "vector-only"
+	default:
 		finalDocs = kwDocs
-		log.Printf("[RAG] vector returned 0, using keyword only: %d docs", len(finalDocs))
+		mode = "keyword-only"
 	}
+
+	// 只打一行：这里原本有 4 条日志，26 RPS 下每秒上百行全在同步写控制台，
+	// 是压测里日志开销的主要来源之一
+	log.Printf("[RAG] retrieve: vector=%d keyword=%d final=%d mode=%s",
+		len(vecDocs), len(kwDocs), len(finalDocs), mode)
 
 	return finalDocs, nil
 }

@@ -283,8 +283,14 @@ maxStep = 5                        # Agent 最大推理步数
 ## 熔断（sony/gobreaker）
 
 按**依赖粒度**独立熔断，而不是全局一个开关：`llm:<模型>` / `redis:<用途>` / `mcp:<工具>` / `http:<服务>`。
-三态机（closed → open → half-open → closed），跳闸规则为「连续失败 N 次」**或**「失败率超阈值且样本足够」；
-客户端主动取消（`context.Canceled`）不计为下游故障，避免用户关页面把服务判死。
+三态机（closed → open → half-open → closed），跳闸规则为「连续失败 N 次」**或**「失败率超阈值且样本足够」。
+
+只有**调用方主动取消**（`context.Canceled`）不计为下游故障，避免用户关页面把服务判死。
+下游**超时算失败**——这点很关键：`context.DeadlineExceeded` 曾经也被当成"非故障"，
+而 go-redis 之类的客户端在连接超时时返回的错误正好满足这个判定，结果连续失败计数永远是 0、
+熔断器**永远不跳闸**，每个请求都要白等一个完整的超时（压测实测 Redis 不可达时 p50 卡在 2058ms）。
+影响面不止 Redis：**任何以超时形式出现的故障都不计数**，而超时恰恰是最常见的故障形态。
+回归测试见 `common/resilience/breaker_test.go` 的 `TestDeadlineExceededCountsAsFailure`。
 
 已接入：各 LLM（按模型名）、Redis 限流与配额、MCP 工具（按工具名）、图片识别 / 百度 TTS / 天气 / Embedding。
 
@@ -305,6 +311,39 @@ maxStep = 5                        # Agent 最大推理步数
 | 文档上传 | ≤ 10MB（仅 `.md` / `.txt`） |
 | 验证码 | 同一邮箱 60 秒冷却，Redis 中 2 分钟有效 |
 | 会话列表 | 最多返回 200 条，按创建时间倒序 |
+
+### 限流什么程度由配置决定
+
+默认值与原硬编码一致：单用户**桶容量 10 / 每秒补 2 个（≈2 QPS）**，未登录接口按 IP **容量 5 / 每 5 秒补 1 个**。
+
+```toml
+[rateLimit]
+enabled = true      # 压测时临时设为 false
+capacity = 10
+refill = 2          # 单用户平均 QPS 上限
+ipCapacity = 5
+ipRefill = 0.2
+```
+
+数字写整数或小数都行（`10` 和 `10.0` 等价）。
+
+## 压测
+
+配套一套零依赖的压测工具，重点是把**被测系统**和**上游模型**解耦：不打 mock 的话，
+测出来的是上游的限流和排队，不是自己的吞吐。
+
+```powershell
+go run ./stress/mockllm -addr :8099 -mode ok -delay 200ms   # 假模型（OpenAI 兼容 + 故障注入）
+go run ./stress/prep    -users 50 -modelType 2 -verify      # 造账号/JWT/会话/知识库索引
+k6 run -e SCENARIO=multi -e VUS=20 -e DURATION=30s stress/k6/chat.js
+```
+
+- `stress/mockllm`：OpenAI 兼容的假模型，同时提供 chat 与 embeddings；运行时可通过 `/__admin/mode?mode=500|slow|flaky|ok` 切换故障，不用重启
+- `stress/prep`：直接往库里写测试账号并用项目同一套密钥签发 JWT（绕开登录接口的 IP 限流），每个账号建好会话和知识库索引
+- `stress/k6/chat.js`：7 个场景 —— `local`（纯本地接口）/ `multi`（多会话并发吞吐）/ `same`（同会话并发，测会话锁串行化）/ `repeat`（重复问题，测三层缓存）/ `long`（长历史，测记忆压缩）/ `stream`（SSE，看 TTFB）/ `mixed`
+- 诊断端点：`[debug] pprofEnabled = true` 后在 **127.0.0.1:6060** 暴露 `/debug/pprof`，并开启 block/mutex 采样（找锁竞争的关键）
+
+完整操作步骤、结果解读、常见问题见 **[stress/README.md](stress/README.md)**。
 
 ## 运行期行为（排障时看这几条）
 

@@ -3,8 +3,8 @@ package logger
 import (
 	"context"
 	"fmt"
+	stdlog "log"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,6 +17,13 @@ var log *slog.Logger
 type contextKey string
 
 const RequestIDKey contextKey = "requestId"
+
+// dynamicWriter 每次写入时才解析真正的输出目标。
+// 这样 Init 和 EnableAsyncOutput 的调用顺序就不重要了——否则先 Init 会把
+// slog 的 handler 永久绑死在 os.Stdout 上，后面开异步也切不过去。
+type dynamicWriter struct{}
+
+func (dynamicWriter) Write(p []byte) (int, error) { return Output().Write(p) }
 
 // Init 初始化日志器，level: debug/info/warn/error
 func Init(level string) {
@@ -40,9 +47,11 @@ func Init(level string) {
 			return a
 		},
 	}
-	handler := slog.NewTextHandler(os.Stdout, opts)
+	handler := slog.NewTextHandler(dynamicWriter{}, opts)
 	log = slog.New(handler)
 	slog.SetDefault(log)
+	// 标准库 log 与 slog 统一到同一个输出目标（开了异步就是异步写入器）
+	stdlog.SetOutput(Output())
 }
 
 // logWithCaller 带调用位置和 requestId 的日志

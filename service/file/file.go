@@ -3,7 +3,6 @@ package file
 import (
 	"context"
 	"deeptalk/common/rag"
-	"deeptalk/config"
 	"deeptalk/utils"
 	"io"
 	"log"
@@ -79,7 +78,7 @@ func UploadRagFile(username string, file *multipart.FileHeader) (string, error) 
 	log.Printf("File uploaded successfully: %s", filePath)
 
 	// 创建 RAG 索引器并对文件进行向量化
-	indexer, err := rag.NewRAGIndexer(filename, config.GetConfig().RagModelConfig.RagEmbeddingModel)
+	indexer, err := rag.NewRAGIndexer(filename)
 	if err != nil {
 		log.Printf("Failed to create RAG indexer: %v", err)
 		// 删除已上传的文件
@@ -95,6 +94,11 @@ func UploadRagFile(username string, file *multipart.FileHeader) (string, error) 
 		rag.DeleteIndex(context.Background(), filename)
 		return "", err
 	}
+
+	// 索引名由文件名决定（rag_docs:<文件名>:idx），换了文件就是换了索引。
+	// RAGQuery 是按用户名缓存的，这里必须主动失效，否则会一直查旧索引 —— 属于
+	// 静默返回错误答案的那种问题，比报错难查得多。
+	rag.InvalidateUser(username)
 
 	log.Printf("File indexed successfully: %s", filename)
 	return filePath, nil

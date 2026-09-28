@@ -219,10 +219,11 @@ func (o *AliRAGModel) GenerateResponse(ctx context.Context, messages []*schema.M
 	lastMessage := messages[len(messages)-1]
 	query := lastMessage.Content
 
-	intent := o.classifyIntent(query)
+	// 分层意图识别：规则层高置信度直接用，模糊时才上抛 LLM 兜底
+	intent := ClassifyIntent(ctx, query, o.llm)
 
 	// --- 总结全文 ---
-	if intent == intentSummary {
+	if intent.Intent == IntentSummary {
 		fullText, err := o.loadFullDocument()
 		if err != nil {
 			log.Printf("[RAG] loadFullDocument failed: %v, fallback to normal", err)
@@ -241,7 +242,7 @@ func (o *AliRAGModel) GenerateResponse(ctx context.Context, messages []*schema.M
 	}
 
 	// --- 闲聊 → 跳过 RAG ---
-	if intent == intentChat {
+	if intent.Intent == IntentChat {
 		log.Printf("[RAG] chat intent, skip RAG")
 		return o.llm.Generate(ctx, messages)
 	}
@@ -287,10 +288,10 @@ func (o *AliRAGModel) StreamResponse(ctx context.Context, messages []*schema.Mes
 	}
 	lastMessage := messages[len(messages)-1]
 	query := lastMessage.Content
-	intent := o.classifyIntent(query)
+	intent := ClassifyIntent(ctx, query, o.llm)
 
 	// 总结全文
-	if intent == intentSummary {
+	if intent.Intent == IntentSummary {
 		fullText, err := o.loadFullDocument()
 		if err != nil {
 			log.Printf("[RAG-Stream] loadFullDocument failed: %v, fallback", err)
@@ -305,7 +306,7 @@ func (o *AliRAGModel) StreamResponse(ctx context.Context, messages []*schema.Mes
 	}
 
 	// 闲聊 → 跳过 RAG
-	if intent == intentChat {
+	if intent.Intent == IntentChat {
 		log.Printf("[RAG-Stream] chat intent, skip RAG")
 		return o.streamWithoutRAG(ctx, messages, cb)
 	}
@@ -419,33 +420,7 @@ func (o *AliRAGModel) extractKeywords(ctx context.Context, query string) []strin
 	return keywords
 }
 
-// intentType 表示用户问题的意图类型
-type intentType int
-
-const (
-	intentSummary  intentType = iota // 总结全文
-	intentQuestion                   // 具体问题 → RAG
-	intentChat                       // 闲聊 → 普通对话
-)
-
-// classifyIntent 用关键词匹配判断用户意图
-func (o *AliRAGModel) classifyIntent(query string) intentType {
-	q := strings.ToLower(query)
-	summaryWords := []string{"总结", "概括", "摘要", "全文", "全部内容", "整篇文档", "整体内容", "大致内容"}
-	for _, w := range summaryWords {
-		if strings.Contains(q, w) {
-			return intentSummary
-		}
-	}
-	// 太短的问题或者纯闲聊 → 不触发 RAG
-	chatWords := []string{"你好", "谢谢", "再见", "怎么样", "你是谁", "能做什么", "hello", "hi", "thanks"}
-	for _, w := range chatWords {
-		if strings.Contains(q, w) && len([]rune(q)) < 15 {
-			return intentChat
-		}
-	}
-	return intentQuestion
-}
+// 意图识别已迁移到 intent.go（分层：规则层 + LLM 兜底，带置信度与评测）
 
 // loadFullDocument 读取用户上传的文档全文
 func (o *AliRAGModel) loadFullDocument() (string, error) {

@@ -17,6 +17,8 @@ import (
 	"deeptalk/common/rag"
 	"deeptalk/config"
 
+	einomodel "github.com/cloudwego/eino/components/model"
+
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -30,6 +32,8 @@ type Case struct {
 	ExpectSources []string `json:"expectSources"`
 	// ExpectRefusal true 表示文档里没有相关信息，模型应当拒答
 	ExpectRefusal bool `json:"expectRefusal"`
+	// ExpectIntent 期望的意图分类（summary/question/chat），留空表示不评测意图
+	ExpectIntent string `json:"expectIntent,omitempty"`
 	// ModelType 用例使用的模型类型，留空用命令行默认值
 	ModelType string `json:"modelType"`
 }
@@ -48,6 +52,7 @@ type Metrics struct {
 	AnswerCoverage  float64 `json:"answerCoverage"`
 	RefusalAccuracy float64 `json:"refusalAccuracy"`
 	Faithfulness    float64 `json:"faithfulness"`
+	IntentAccuracy  float64 `json:"intentAccuracy"`
 }
 
 // CaseResult 单条结果
@@ -77,6 +82,7 @@ type Report struct {
 	Metrics         Metrics      `json:"metrics"`
 	AvgLatencyMS    int64        `json:"avgLatencyMs"`
 	Results         []CaseResult `json:"results"`
+	Intent          *IntentEval  `json:"intent,omitempty"`
 	ThresholdFailed []string     `json:"thresholdFailed,omitempty"`
 }
 
@@ -103,6 +109,10 @@ type Options struct {
 	TopK      int    // 检索返回条数（0 用默认）
 	Judge     bool   // 是否用 LLM 给"忠实度"打分（会多花 token）
 	Verbose   bool
+	// IntentOnly 只评测意图识别（规则层，本地零成本），跳过检索与生成
+	IntentOnly bool
+	// IntentLLM 用真实模型跑"规则层不确定"的那部分（会产生少量模型调用）
+	IntentLLM bool
 }
 
 var refusalPatterns = []string{
@@ -113,6 +123,15 @@ var refusalPatterns = []string{
 // Run 执行评测
 func Run(ctx context.Context, set *Set, opts Options) *Report {
 	report := &Report{SetName: set.Name, ModelType: opts.ModelType, User: opts.User, Total: len(set.Cases)}
+
+	// 意图评测：纯本地规则层，零成本（不调模型），所以永远先跑
+	report.Intent = RunIntentEval(set)
+	report.Metrics.IntentAccuracy = report.Intent.Accuracy
+
+	if opts.IntentOnly {
+		// 只评测意图：不跑检索/生成，秒级返回、不花一分钱
+		return report
+	}
 
 	var recallSum, coverageSum, refusalSum, faithfulSum float64
 	var latencySum int64
@@ -322,6 +341,209 @@ func judgeFaithfulness(ctx context.Context, model aihelper.AIModel, docs []*sche
 	}
 }
 
+// ======================== 意图识别评测 ========================
+//
+// 只跑规则层（纯本地、零成本），因此可以每次改动都跑；
+// 统计三件事：整体准确率、每类 P/R/F1、以及"低置信度占比"
+// （后者 = 线上需要走 LLM 兜底的流量比例，直接决定兜底的调用成本）
+
+// IntentCaseResult 单条意图判定结果
+type IntentCaseResult struct {
+	ID        string `json:"id"`
+	Question  string `json:"question"`
+	Expected  string `json:"expected"`
+	Predicted string `json:"predicted"`
+	Correct   bool   `json:"correct"`
+	Confident bool   `json:"confident"` // false = 线上会走 LLM 兜底
+	UsedLLM   bool   `json:"usedLlm,omitempty"`
+	Reason    string `json:"reason"`
+}
+
+// ClassMetric 单个意图类别的指标
+type ClassMetric struct {
+	Precision float64 `json:"precision"`
+	Recall    float64 `json:"recall"`
+	F1        float64 `json:"f1"`
+	Support   int     `json:"support"`
+}
+
+// IntentEval 意图评测汇总
+type IntentEval struct {
+	Total          int                       `json:"total"`
+	Correct        int                       `json:"correct"`
+	Accuracy       float64                   `json:"accuracy"`
+	LegacyCorrect  int                       `json:"legacyCorrect"`
+	LegacyAccuracy float64                   `json:"legacyAccuracy"` // 重构前规则在同一份集合上的表现
+	LowConf        int                       `json:"lowConfidenceCount"`
+	LowConfRate    float64                   `json:"lowConfidenceRate"`
+	Confusion      map[string]map[string]int `json:"confusion"`
+	PerClass       map[string]ClassMetric    `json:"perClass"`
+	Wrong          []IntentCaseResult        `json:"wrong,omitempty"`
+	Results        []IntentCaseResult        `json:"results,omitempty"`            // 全部用例（用于算兜底后的准确率）
+	LLMCorrect     int                       `json:"llmCorrect,omitempty"`
+	LLMAccuracy    float64                   `json:"llmAccuracy,omitempty"`    // 加入 LLM 兜底后的准确率
+}
+
+// ApplyLLMFallback 对"规则层不确定"的用例调用真实模型重判，量化兜底带来的提升
+// 只对少量用例产生模型调用（实测约 7%），成本很小
+func (e *IntentEval) ApplyLLMFallback(ctx context.Context, llm einomodel.ToolCallingChatModel) {
+	if e == nil || llm == nil {
+		return
+	}
+
+	e.LLMCorrect = 0
+	for i := range e.Results {
+		r := &e.Results[i]
+		if !r.Confident {
+			res := aihelper.ClassifyIntent(ctx, r.Question, llm)
+			r.Predicted = string(res.Intent)
+			r.Correct = r.Predicted == r.Expected
+			r.Reason = "llm兜底: " + res.Reason
+			r.UsedLLM = true
+		}
+		if r.Correct {
+			e.LLMCorrect++
+		}
+	}
+	if e.Total > 0 {
+		e.LLMAccuracy = float64(e.LLMCorrect) / float64(e.Total)
+	}
+
+	// 兜底后重新统计"判错清单"，避免报告里出现"准确率 1.00 但仍列出错例"的矛盾
+	e.Wrong = e.Wrong[:0]
+	for i := range e.Results {
+		if !e.Results[i].Correct {
+			e.Wrong = append(e.Wrong, e.Results[i])
+		}
+	}
+}
+
+// legacyRuleIntent 重构前的规则快照（仅用于对比，不参与线上逻辑）
+// 特点：纯子串匹配 + 长度阈值，没有整词匹配、没有指代/疑问词守卫、没有置信度与兜底
+func legacyRuleIntent(question string) string {
+	q := strings.ToLower(question)
+	for _, w := range []string{"总结", "概括", "摘要", "全文", "全部内容", "整篇文档", "整体内容", "大致内容"} {
+		if strings.Contains(q, w) {
+			return "summary"
+		}
+	}
+	for _, w := range []string{"你好", "谢谢", "再见", "怎么样", "你是谁", "能做什么", "hello", "hi", "thanks"} {
+		if strings.Contains(q, w) && len([]rune(q)) < 15 {
+			return "chat"
+		}
+	}
+	return "question"
+}
+
+// RunIntentEval 跑意图评测（不调模型）
+func RunIntentEval(set *Set) *IntentEval {
+	e := &IntentEval{
+		Confusion: map[string]map[string]int{},
+		PerClass:  map[string]ClassMetric{},
+	}
+
+	for _, label := range aihelper.AllIntents() {
+		e.Confusion[string(label)] = map[string]int{}
+	}
+
+	for i := range set.Cases {
+		c := set.Cases[i]
+		if c.ExpectIntent == "" {
+			continue // 未标注期望意图的用例不参与
+		}
+
+		res, confident := aihelper.RuleIntentWithConfidence(c.Question)
+		predicted := string(res.Intent)
+
+		e.Total++
+		if !confident {
+			e.LowConf++
+		}
+		if legacyRuleIntent(c.Question) == c.ExpectIntent {
+			e.LegacyCorrect++
+		}
+		e.Confusion[c.ExpectIntent][predicted]++
+		if predicted == c.ExpectIntent {
+			e.Correct++
+		}
+
+		row := IntentCaseResult{
+			ID: c.ID, Question: c.Question, Expected: c.ExpectIntent,
+			Predicted: predicted, Correct: predicted == c.ExpectIntent,
+			Confident: confident, Reason: res.Reason,
+		}
+		e.Results = append(e.Results, row)
+		if !row.Correct {
+			e.Wrong = append(e.Wrong, row)
+		}
+	}
+
+	if e.Total > 0 {
+		e.Accuracy = float64(e.Correct) / float64(e.Total)
+		e.LegacyAccuracy = float64(e.LegacyCorrect) / float64(e.Total)
+		e.LowConfRate = float64(e.LowConf) / float64(e.Total)
+	}
+	e.computePerClass()
+	return e
+}
+
+func (e *IntentEval) computePerClass() {
+	labels := make([]string, 0, 3)
+	for _, l := range aihelper.AllIntents() {
+		labels = append(labels, string(l))
+	}
+
+	for _, label := range labels {
+		var tp, fp, fn int
+		for expected, row := range e.Confusion {
+			for predicted, n := range row {
+				switch {
+				case expected == label && predicted == label:
+					tp += n
+				case expected == label && predicted != label:
+					fn += n
+				case expected != label && predicted == label:
+					fp += n
+				}
+			}
+		}
+		m := ClassMetric{Support: tp + fn}
+		if tp+fp > 0 {
+			m.Precision = float64(tp) / float64(tp+fp)
+		}
+		if tp+fn > 0 {
+			m.Recall = float64(tp) / float64(tp+fn)
+		}
+		if m.Precision+m.Recall > 0 {
+			m.F1 = 2 * m.Precision * m.Recall / (m.Precision + m.Recall)
+		}
+		e.PerClass[label] = m
+	}
+}
+
+// Matrix 输出文本混淆矩阵（行=期望，列=预测）
+func (e *IntentEval) Matrix() string {
+	labels := make([]string, 0, 3)
+	for _, l := range aihelper.AllIntents() {
+		labels = append(labels, string(l))
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%-10s", "期望\\预测"))
+	for _, l := range labels {
+		sb.WriteString(fmt.Sprintf("%-10s", l))
+	}
+	sb.WriteString("\n")
+	for _, exp := range labels {
+		sb.WriteString(fmt.Sprintf("%-10s", exp))
+		for _, pre := range labels {
+			sb.WriteString(fmt.Sprintf("%-10d", e.Confusion[exp][pre]))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
 func checkThresholds(report *Report, th Metrics) {
 	if th.RetrievalRecall > 0 && report.Metrics.RetrievalRecall < th.RetrievalRecall {
 		report.ThresholdFailed = append(report.ThresholdFailed,
@@ -334,6 +556,10 @@ func checkThresholds(report *Report, th Metrics) {
 	if th.RefusalAccuracy > 0 && report.Metrics.RefusalAccuracy < th.RefusalAccuracy {
 		report.ThresholdFailed = append(report.ThresholdFailed,
 			fmt.Sprintf("拒答准确率 %.2f < 阈值 %.2f", report.Metrics.RefusalAccuracy, th.RefusalAccuracy))
+	}
+	if th.IntentAccuracy > 0 && report.Metrics.IntentAccuracy < th.IntentAccuracy {
+		report.ThresholdFailed = append(report.ThresholdFailed,
+			fmt.Sprintf("意图准确率 %.2f < 阈值 %.2f", report.Metrics.IntentAccuracy, th.IntentAccuracy))
 	}
 	if th.Faithfulness > 0 && report.Metrics.Faithfulness < th.Faithfulness {
 		report.ThresholdFailed = append(report.ThresholdFailed,

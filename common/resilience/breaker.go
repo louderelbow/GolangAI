@@ -86,7 +86,16 @@ func (r *registry) breaker(name string) *gobreaker.CircuitBreaker[any] {
 		},
 
 		IsSuccessful: func(err error) bool {
-			return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+			// 只有"调用方主动取消"才算非失败（用户关页面不该把下游判死）。
+			//
+			// 注意这里**不能**把 context.DeadlineExceeded 也算成功：
+			// 下游超时（连接超时 / 读超时 / 我们自己的 WithTimeout）恰恰是最常见的故障形态，
+			// 而 go-redis 之类的客户端在连接超时后返回的错误正好满足
+			// errors.Is(err, context.DeadlineExceeded)。一旦算成功，
+			// count 里的 ConsecutiveFailures 永远是 0，熔断器**永远不会跳闸**，
+			// 每个请求都要把完整的超时时间等一遍。
+			// （这个坑是压测时发现的：Redis 不可达时 p50 一直卡在 2 秒，熔断器却始终 closed。）
+			return err == nil || errors.Is(err, context.Canceled)
 		},
 
 		OnStateChange: func(name string, from, to gobreaker.State) {

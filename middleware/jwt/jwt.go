@@ -4,7 +4,6 @@ import (
 	"deeptalk/common/code"
 	"deeptalk/controller"
 	"deeptalk/utils/myjwt"
-	"log"
 	"net/http"
 	"strings"
 
@@ -31,8 +30,9 @@ func Auth() gin.HandlerFunc {
 			return
 		}
 
-		// 不要把完整 token 写进日志（日志会被收集/转发，等同于泄露凭据）
-		log.Printf("jwt auth: tokenLen=%d", len(token))
+		// 不要把完整 token 写进日志（日志会被收集/转发，等同于泄露凭据）。
+		// 这里原本每个请求打一行 tokenLen，属于纯噪音——26 RPS 下每秒几十行写控制台，
+		// 排障时用不上，已去掉。
 		userName, ok := myjwt.ParseToken(token)
 		if !ok {
 			c.JSON(http.StatusOK, res.CodeOf(code.CodeInvalidToken))
