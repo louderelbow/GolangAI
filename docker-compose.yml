@@ -1,70 +1,96 @@
-# DeepTalk 基础设施 + 后端
+# ============================================================
+# DeepTalk 一键部署：MySQL + Redis Stack + RabbitMQ + 后端 + 前端(Nginx)
+#
 # 用法：
-#   只启基础设施（GoLand 跑后端）：docker-compose up -d mysql redis rabbitmq
-#   全部启动：                 docker-compose up -d
-#   查看日志：                 docker-compose logs -f backend
-#   管理界面：
-#     RabbitMQ → http://localhost:15672 (root/123456)
-#     Redis    → http://localhost:8001
+#   1. copy .env.example .env      然后填上模型 API Key
+#   2. docker compose up -d --build
+#   3. 浏览器打开 http://localhost:8080
+#
+# 常用命令：
+#   docker compose ps                      看各服务状态
+#   docker compose logs -f backend         跟后端日志
+#   docker compose up -d --build backend   只重建后端
+#   docker compose down                    停止（数据保留在 volume 里）
+#   docker compose down -v                 停止并删除数据（慎用）
+#
+# 只起基础设施、后端在 GoLand 里跑：
+#   docker compose up -d mysql redis rabbitmq
+# ============================================================
 
-version: "3.8"
 services:
+  # ---------------- 基础设施 ----------------
+
   mysql:
     image: mysql:8.0
     container_name: deeptalk-mysql
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "050922"
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-050922}
       MYSQL_DATABASE: deeptalk
     ports:
-      - "3306:3306"
+      # 左边是宿主机端口。默认不用 3306，避免和你本机已经装好的 MySQL 冲突。
+      # 容器内部仍然是标准的 3306，所以 config.toml.docker 里写的还是 3306。
+      - "127.0.0.1:${MYSQL_HOST_PORT:-3307}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./gopherai.sql:/docker-entrypoint-initdb.d/init.sql
-    command: --default-authentication-plugin=mysql_native_password
+      # 首次启动（数据卷为空）时自动执行，建表 + 初始化
+      - ./gopherai.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-050922}"]
       interval: 5s
-      timeout: 3s
-      retries: 10
+      timeout: 5s
+      retries: 20
+      start_period: 30s
 
   redis:
+    # 必须是 Redis Stack，不是普通 redis：
+    # RAG 的向量检索依赖 RediSearch 模块（FT.CREATE / FT.SEARCH），
+    # 普通 redis 镜像没有这个模块，建索引会直接报 unknown command。
     image: redis/redis-stack:latest
     container_name: deeptalk-redis
+    restart: unless-stopped
     ports:
-      - "6379:6379"
-      - "8001:8001"
+      - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
+      - "127.0.0.1:8001:8001"   # RedisInsight 可视化界面
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
 
   rabbitmq:
     image: rabbitmq:3-management
     container_name: deeptalk-rabbitmq
+    restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: root
-      RABBITMQ_DEFAULT_PASS: "123456"
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-root}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-123456}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:${RABBITMQ_HOST_PORT:-5673}:5672"
+      - "127.0.0.1:${RABBITMQ_UI_HOST_PORT:-15673}:15672"   # 管理界面
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # ---------------- 后端 ----------------
 
   backend:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: deeptalk-backend
-    ports:
-      - "9090:9090"
+    restart: unless-stopped
     depends_on:
       mysql:
         condition: service_healthy
@@ -73,11 +99,49 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - ALIYUN_API_KEY=${ALIYUN_API_KEY}
-    command: ["/app/deeptalk"]
+      - DEEPTALK_CONFIG=/app/config/config.toml
+      # 模型 Key 从 .env 注入（config.toml.docker 里 apiKey 留空时会读这两个）
+      - ALIYUN_API_KEY=${ALIYUN_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - TZ=Asia/Shanghai
+    volumes:
+      # 用户上传的文档必须持久化，否则每次重建镜像全部丢失
+      - uploads:/app/uploads
+      # 把 docker 配置挂进去：改配置只要 docker compose restart backend，
+      # 不用重新构建镜像。只读挂载，容器改不了宿主机文件。
+      - ./config/config.toml.docker:/app/config/config.toml:ro
+    # 不对外暴露 9090：只有 frontend 通过内部网络访问它。
+    # 想在宿主机直接调后端接口调试的话，取消下面这行的注释：
+    # ports:
+    #   - "127.0.0.1:9090:9090"
+    expose:
+      - "9090"
+    healthcheck:
+      # 项目没有 /healthz，用 /metrics（返回 200 且不依赖数据库）
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------- 前端 + Nginx ----------------
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: deeptalk-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      # 唯一对外暴露的端口，浏览器访问这个
+      - "${WEB_PORT:-8080}:80"
+    environment:
+      - TZ=Asia/Shanghai
 
 volumes:
   mysql_data:
   redis_data:
   rabbitmq_data:
+  uploads:

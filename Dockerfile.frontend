@@ -1,0 +1,38 @@
+# ============================================================
+# 前端镜像：Vue CLI 构建 + Nginx 托管
+#
+# 分两个阶段，是因为"构建要 Node 和一堆依赖"、"运行只要静态文件"这两件事
+# 需要的环境完全不同。分阶段之后最终镜像只有 Nginx + 几百 KB 静态文件，
+# 不带 node_modules（那玩意动辄几百 MB）。
+# ============================================================
+
+# ---------- 阶段 1：构建 ----------
+FROM node:20-alpine AS builder
+
+WORKDIR /web
+
+# 先只拷 manifest，让 npm 这层能被 Docker 缓存住：
+# 只要依赖没变，改业务代码不会重新下载依赖
+COPY vue-frontend/package.json vue-frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+# 再拷源码并构建
+COPY vue-frontend/ ./
+RUN npm run build
+
+
+# ---------- 阶段 2：运行 ----------
+FROM nginx:1.27-alpine
+
+# 去掉默认站点，换成我们自己的配置
+RUN rm -f /etc/nginx/conf.d/default.conf
+COPY deploy/nginx.conf /etc/nginx/conf.d/deeptalk.conf
+
+# 只把构建产物拷过来
+COPY --from=builder /web/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+# 健康检查：/ 能返回 200 就算活着
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1

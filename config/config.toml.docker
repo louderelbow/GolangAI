@@ -1,5 +1,7 @@
+
 [mainConfig]
 appName = "DeepTalk"
+# 容器里必须监听 0.0.0.0，监听 127.0.0.1 的话只有容器内部能访问，Nginx 连不上
 host = "0.0.0.0"
 port = 9090
 
@@ -25,6 +27,7 @@ charset = "utf8mb4"
 expire_duration = 8760
 issuer = "immortal"
 subject = "DeepTalk"
+# 生产环境务必换成随机长字符串，否则任何人都能伪造 token
 key = "GolangAIwpl"
 
 [rabbitmqConfig]
@@ -40,9 +43,85 @@ chatModelName = "qwen-turbo"
 docDir = "./docs"
 baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 dimension = 1024
-apiKey = "sk-686d51e45428463b8970db7296aa7cd4"
+apiKey = ""
 maxContextTokens = 4000
+# 相关性阈值（余弦距离，越小越相关）；文档短、语料口语化时放宽到 0.7
+maxDistance = 0.7
+# 所有分片都没过阈值时至少保留几个最相关的
+fallbackTopN = 3
 
 [voiceServiceConfig]
-voiceServiceApiKey = "UJb2GVWwLRsnec5sFeKaj3hZ"
-voiceServiceSecretKey = "SeotgK0OtllA7VlH6hJCZRcFn1L0XyFk"
+voiceServiceApiKey = ""
+voiceServiceSecretKey = ""
+
+# ============ 费用与配额 ============
+[aiPricing]
+defaultPromptPrice = 2.0
+defaultCompletionPrice = 8.0
+# 每用户每日 token 配额（prompt+completion 合计），0 表示不限
+dailyTokenQuota = 0
+
+[aiPricing.promptPrice]
+deepseek-chat = 2.0
+qwen-turbo = 0.3
+
+[aiPricing.completionPrice]
+deepseek-chat = 8.0
+qwen-turbo = 0.6
+
+# ============ 系统提示 ============
+# 稳定的前缀放在消息最前面，有利于命中上游的 prompt 前缀缓存
+[aiPrompt]
+systemPrompt = "你是 DeepTalk 的智能助手。回答简洁、准确、有依据；不确定时明确说明，不要编造。"
+
+# ============ 语义缓存 ============
+# 相似问题直接返回缓存答案，省 token / 降延迟
+# 注意：只对"没有历史上下文"的首轮提问生效
+[semanticCache]
+enabled = true
+threshold = 0.92
+maxEntries = 500
+ttlSeconds = 3600
+
+# ============ MCP 工具注册表 ============
+# maxStep 必须写在 [[mcpConfig.servers]] 之前，否则会被当成某个 server 的字段
+[mcpConfig]
+maxStep = 5
+
+
+# [[mcpConfig.servers]]
+# name = "weather"
+# url = "http://mcp-weather:8081/mcp"
+# allowedTools = ["get_weather"]
+
+# ============ 熔断 ============
+[resilience]
+disabled = false
+failureThreshold = 5
+failureRatio = 0.6
+minRequests = 10
+timeoutSeconds = 30
+maxRequestsHalfOpen = 3
+intervalSeconds = 60
+
+# ============ 意图识别 ============
+# 规则层永远生效且零成本；llmFallback 控制"规则层不确定时是否用 LLM 兜底"
+[intentConfig]
+llmFallback = true
+cacheTTLSeconds = 600
+maxCacheEntries = 1000
+
+# ============ 限流 ============
+# 单用户桶容量 10、每秒补 2 个（约 2 QPS）；未登录接口按 IP 限流
+[rateLimit]
+enabled = true
+capacity = 10
+refill = 2
+ipCapacity = 5
+ipRefill = 0.2
+
+# ============ 诊断端点 ============
+# 容器里保持关闭。需要排查时打开，并只在本机通过 SSH 隧道访问 6060
+[debug]
+pprofEnabled = false
+pprofAddr = "127.0.0.1:6060"

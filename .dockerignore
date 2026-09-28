@@ -1,0 +1,33 @@
+# 构建上下文要尽量小：这个文件里排除的东西不会被塞进 Docker daemon。
+# 不做的话，vue-frontend/node_modules + .gocache 加起来超过 1.5GB，
+# 每次 docker build 都要先传一遍，慢到不可用。
+
+# ---- 版本控制 / IDE ----
+.git
+.gitignore
+.idea
+.vscode
+
+# ---- 构建缓存（不要进镜像）----
+.gocache/
+tmp/
+*.exe
+*.exe~
+*.prof
+
+# ---- 前端依赖与产物（前端镜像里会重新装、重新构建）----
+vue-frontend/node_modules/
+vue-frontend/dist/
+
+# ---- 用户上传的文档（运行时挂 volume，不能打进镜像）----
+uploads/
+docs/
+
+# ---- 压测工具（只在本地用，不需要进镜像）----
+stress/
+
+# ---- 密钥与本地配置 ----
+.env
+config/config.toml
+
+# 注意：config/config.toml.docker 必须保留（Dockerfile 要 COPY 它）

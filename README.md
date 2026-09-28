@@ -355,6 +355,47 @@ k6 run -e SCENARIO=multi -e VUS=20 -e DURATION=30s stress/k6/chat.js
 | 流式取消 | 客户端断开时取消上游模型调用，不再继续消耗 token |
 | 日志脱敏 | 不再打印完整 JWT 与完整模型输出，只记录长度/摘要 |
 
+## Docker 部署（Docker + Nginx）
+
+一条命令起全部服务（MySQL + Redis Stack + RabbitMQ + 后端 + 前端 Nginx）：
+
+```powershell
+copy .env.example .env        # 然后填上 ALIYUN_API_KEY
+docker compose up -d --build
+# 浏览器打开 http://localhost:8080
+```
+
+结构：
+
+```
+浏览器 → frontend 容器(Nginx) → backend 容器 → mysql / redis / rabbitmq
+              │
+              └─ /api/... 反向代理到 backend:9090，并补上 /v1
+                 （和 vue.config.js 里 devServer 的 pathRewrite 一致）
+```
+
+**只有 frontend 对外暴露端口**，后端和中间件都只在容器内部网络上，宿主机端口绑 `127.0.0.1`。
+
+涉及的几个文件：
+
+| 文件 | 作用 |
+|---|---|
+| `Dockerfile` | 后端多阶段构建（golang:alpine 编译 → alpine 运行） |
+| `Dockerfile.frontend` | 前端多阶段构建（node 构建 → nginx 托管静态文件） |
+| `deploy/nginx.conf` | Nginx 配置：SPA 回退、API 反向代理、**SSE 关缓冲**、上传体积 |
+| `docker-compose.yml` | 五个服务的编排、健康检查、数据卷 |
+| `config/config.toml.docker` | 容器内配置（地址改成服务名、密钥走环境变量） |
+| `.env.example` | 密钥与端口映射模板（复制成 `.env`，已被 gitignore） |
+
+**三个最容易踩的坑**（详见 [deploy/README.md](deploy/README.md)）：
+
+1. **流式对话卡住** —— Nginx 必须 `proxy_buffering off`，否则 SSE 字节被攒着不发，用户要等整段回答生成完才看到内容
+2. **上传返回 413** —— Nginx 默认只允许 1MB 请求体，要显式设 `client_max_body_size 10m`
+3. **Redis 必须是 Redis Stack** —— RAG 向量检索依赖 RediSearch（`FT.CREATE`/`FT.SEARCH`），普通 `redis` 镜像没有这个模块
+
+> ⚠️ 上线前务必轮换 `config/config.toml.docker` 里的邮箱授权码和语音服务 Key
+> （该文件被 git 跟踪，密钥已进历史），并换掉 `jwtConfig.key`。
+
 ## License
 
 MIT

@@ -26,6 +26,10 @@ Thumbs.db
 # 环境变量文件（防止泄露你的 API Key）
 .env
 
+# HTTPS 证书（deploy/README.md 里用 certbot 生成，不能提交）
+deploy/certs/
+deploy/www/
+
 # 配置文件（真实配置不上传，请复制 config.toml.example 为 config.toml 后填写）
 config/config.toml
 
