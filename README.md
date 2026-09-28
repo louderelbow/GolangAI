@@ -110,15 +110,14 @@ cp config/config.toml.example config/config.toml
 # 编辑 config.toml 填入你的 MySQL/Redis/RabbitMQ/API Key 配置
 ```
 
-### API Key 放在哪（两条线，别搞混）
+### API Key
 
 | 用途 | 读取位置 | 说明 |
 |------|----------|------|
 | **DeepSeek**（modelType 1 / 5 的对话模型） | `[deepSeekConfig]` → 环境变量 `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL_NAME` / `DEEPSEEK_API_KEY`（也兼容 `OPENAI_*`）→ 默认 `https://api.deepseek.com` + `deepseek-chat` | 配置留空即用环境变量；两者都支持 |
 | **阿里百炼**（modelType 2/3 的对话模型 + Embedding + 图片识别） | `[ragModelConfig] apiKey` → 环境变量 `ALIYUN_API_KEY` → `DEEPSEEK_API_KEY` → `OPENAI_API_KEY` | 建议只填 `ragModelConfig.apiKey` |
 
-> 结论：**DeepSeek 的 key 不在 config.toml 里也能跑**（默认读环境变量），
-> 想集中管理就往 `[deepSeekConfig] apiKey` 填；填了就以配置文件为准。
+
 
 ### 2. 初始化数据库
 
@@ -229,7 +228,7 @@ deeptalk_ai_active_sessions                                  # 内存中活跃�
 元 / 100 万 token。`promptPrice.<模型名>`、`completionPrice.<模型名>`，未配置走 `default*`。
 命中前缀缓存的输入 token 按 0.1 系数计费。`dailyTokenQuota > 0` 时按用户每日限流（Redis 计数，Redis 不可用退回进程内）。
 
-### Prompt 前缀缓存（省钱的关键）
+### Prompt 前缀缓存
 
 消息顺序被刻意设计为**稳定前缀在前、易变内容在后**：
 
@@ -255,7 +254,7 @@ go run ./cmd/eval -set eval/golden_example.json -user <你的账号> [-type 2] [
 指标：**检索召回率**（`expectSources` 是否出现在检索结果里）、**要点覆盖率**（`expectPoints` 是否被答案覆盖）、**拒答准确率**（该拒答的有没有拒答）、**忠实度**（`-judge` 时用 LLM 打分）、平均延迟。
 黄金集里的 `thresholds` 低于阈值时 CLI **退出码为 1**，可直接作为 CI / 发布前卡点。
 
-## MCP 工具（给 AI 加能力，不用自己写）
+## MCP 工具
 
 `[mcpConfig.servers]` 声明工具来源，工具由**模型原生 function calling** 调用（不再依赖提示词里"让模型吐 JSON"）：
 
@@ -280,7 +279,7 @@ maxStep = 5                        # Agent 最大推理步数
 - 超限返回 HTTP 429 `{"status_code":4002,"status_msg":"请求过于频繁，请稍后再试"}`
 - **Redis 不可用时降级本地内存限流**（仍有限流效果，而不是放行）；Redis 报错由熔断器接管（连续失败即打开，见下）
 
-## 熔断（sony/gobreaker）
+## 熔断（gobreaker）
 
 按**依赖粒度**独立熔断，而不是全局一个开关：`llm:<模型>` / `redis:<用途>` / `mcp:<工具>` / `http:<服务>`。
 三态机（closed → open → half-open → closed），跳闸规则为「连续失败 N 次」**或**「失败率超阈值且样本足够」。
@@ -299,7 +298,7 @@ maxStep = 5                        # Agent 最大推理步数
 
 实测（上游全部返回 500）：前 5 次真实失败各约 1040ms，两个熔断器同时打开后，第 6 次起 **约 20ms 快速失败**，返回 5004「AI 服务暂时不可用」。
 
-## 请求限制（生产注意）
+## 请求限制
 
 | 位置 | 限制 |
 |------|------|
@@ -345,7 +344,7 @@ k6 run -e SCENARIO=multi -e VUS=20 -e DURATION=30s stress/k6/chat.js
 
 完整操作步骤、结果解读、常见问题见 **[stress/README.md](stress/README.md)**。
 
-## 运行期行为（排障时看这几条）
+## 运行期行为
 
 | 行为 | 说明 |
 |------|------|
@@ -393,9 +392,4 @@ docker compose up -d --build
 2. **上传返回 413** —— Nginx 默认只允许 1MB 请求体，要显式设 `client_max_body_size 10m`
 3. **Redis 必须是 Redis Stack** —— RAG 向量检索依赖 RediSearch（`FT.CREATE`/`FT.SEARCH`），普通 `redis` 镜像没有这个模块
 
-> ⚠️ 上线前务必轮换 `config/config.toml.docker` 里的邮箱授权码和语音服务 Key
-> （该文件被 git 跟踪，密钥已进历史），并换掉 `jwtConfig.key`。
 
-## License
-
-MIT
