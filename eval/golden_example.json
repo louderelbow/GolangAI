@@ -4,7 +4,8 @@
   "thresholds": {
     "retrievalRecall": 0.7,
     "answerCoverage": 0.6,
-    "refusalAccuracy": 0.9
+    "refusalAccuracy": 0.9,
+    "intentAccuracy": 0.9
   },
   "cases": [
     {

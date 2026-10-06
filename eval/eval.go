@@ -130,7 +130,10 @@ func Run(ctx context.Context, set *Set, opts Options) *Report {
 	report.Metrics.IntentAccuracy = report.Intent.Accuracy
 
 	if opts.IntentOnly {
-		// 只评测意图：不跑检索/生成，秒级返回、不花一分钱
+		// 只评测意图：不跑检索/生成，秒级返回、不花一分钱。
+		// 注意：此时召回/覆盖/拒答指标未参与评测（恒为 0），
+		// 不能复用 checkThresholds，否则会被这些阈值误判为不达标。
+		checkIntentThreshold(report, set.Thresholds)
 		return report
 	}
 
@@ -543,6 +546,16 @@ func (e *IntentEval) Matrix() string {
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+// checkIntentThreshold 只校验意图准确率。
+// intentOnly 模式下检索/覆盖/拒答指标未参与评测（恒为 0），
+// 复用 checkThresholds 会被这些阈值误判为失败，所以单独校验。
+func checkIntentThreshold(report *Report, th Metrics) {
+	if th.IntentAccuracy > 0 && report.Metrics.IntentAccuracy < th.IntentAccuracy {
+		report.ThresholdFailed = append(report.ThresholdFailed,
+			fmt.Sprintf("意图准确率 %.2f < 阈值 %.2f", report.Metrics.IntentAccuracy, th.IntentAccuracy))
+	}
 }
 
 func checkThresholds(report *Report, th Metrics) {

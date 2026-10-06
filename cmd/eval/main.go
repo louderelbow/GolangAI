@@ -119,7 +119,13 @@ func main() {
 				log.Printf("写报告失败: %v", err)
 			}
 		}
-		if report.Intent != nil && report.Intent.Accuracy < 0.8 {
+		// 用黄金集里可配置的 intentAccuracy 阈值判定（不再硬编码），
+		// 并把未达标的项打印出来，便于 CI 日志里直接看到原因。
+		if len(report.ThresholdFailed) > 0 {
+			fmt.Printf("\n❌ 未达标：\n")
+			for _, f := range report.ThresholdFailed {
+				fmt.Printf("   - %s\n", f)
+			}
 			os.Exit(1)
 		}
 		return

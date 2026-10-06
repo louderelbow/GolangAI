@@ -1,5 +1,7 @@
 # DeepTalk
 
+[![CI](https://github.com/louderelbow/GolangAI/actions/workflows/ci.yml/badge.svg)](https://github.com/louderelbow/GolangAI/actions/workflows/ci.yml)
+
 一个基于 Go + Vue 3 的多模型推理服务。项目采用 MVC 业务分层与 `internal/` 能力分层，统一支持纯对话、确定性 RAG 和 Unified Agent 三条执行路径。
 
 ## 功能特性

@@ -1,0 +1,74 @@
+name: CI
+
+# 触发条件：推送到 master 或任何 PR
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+
+# 同一分支的新推送会取消上一次未完成的运行，避免排队
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # Job 1：编译 + 静态检查 + 竞态测试
+  # 失败含义：代码本身有问题（编译不过 / 数据竞争 / 单测挂了）
+  # ============================================================
+  build-test:
+    name: 构建与测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: 下载依赖
+        run: go mod download
+
+      - name: 编译
+        run: go build ./...
+
+      - name: 静态检查
+        run: go vet ./...
+
+      # -race 必须跑：这个项目有过并发写历史丢消息的数据竞争，
+      # 竞态只在运行时暴露，普通 go test 测不出来
+      - name: 测试（含竞态检测）
+        run: go test -race ./...
+
+  # ============================================================
+  # Job 2：意图识别准确率门禁
+  # 失败含义：代码能跑，但效果劣化了 —— 这类问题比编译错误隐蔽得多
+  #
+  # 为什么能在 CI 里跑：
+  #   -intentOnly 走纯本地规则层，不连 MySQL/Redis、不调用任何模型、
+  #   零成本、秒级返回，因此不需要任何 secrets 或外部服务。
+  #
+  # 门禁机制：黄金集 eval/golden_example.json 里的 thresholds.intentAccuracy
+  # 低于阈值时 CLI 退出码为 1，CI 即判定失败。
+  # 注意：CI 环境没有 config/config.toml（被 gitignore），
+  # config 会自动回退到 config/config.toml.example。
+  # ============================================================
+  eval-gate:
+    name: 意图准确率门禁
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: 意图识别评测（阈值不达标则退出码 1）
+        run: go run ./cmd/eval -intentOnly -v=false
