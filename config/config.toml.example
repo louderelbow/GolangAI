@@ -45,10 +45,6 @@ maxContextTokens = 4000
 maxDistance = 0.5            # 相关性阈值（余弦距离，越小越严格）；召回低就放宽到 0.7
 fallbackTopN = 3             # 全都没过阈值时至少保留几条分片
 
-[voiceServiceConfig]
-voiceServiceApiKey = "your-voice-service-api-key"
-voiceServiceSecretKey = "your-voice-service-secret-key"
-
 
 # ============ 模型计费与可观测（元 / 100 万 token）============
 # 用于把每次请求的 token 换算成费用，并累计到 /metrics

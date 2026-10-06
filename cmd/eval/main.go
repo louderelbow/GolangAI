@@ -1,19 +1,20 @@
 // 评测 CLI：跑黄金集并输出指标报告
 //
 // 用法：
-//   go run ./cmd/eval -set eval/golden_example.json -user <账号> [-type 2] [-judge] [-v]
+//
+//	go run ./cmd/eval -set eval/golden_example.json -user <账号> [-type 2] [-judge] [-v]
 //
 // 指标低于黄金集里的 thresholds 时进程退出码为 1（可直接用于 CI / 发布前卡点）
 package main
 
 import (
 	"context"
-	"deeptalk/common/aihelper"
-	"deeptalk/common/metrics"
-	"deeptalk/common/mysql"
-	"deeptalk/common/redis"
-	"deeptalk/config"
 	"deeptalk/eval"
+	"deeptalk/internal/decision"
+	"deeptalk/internal/infra/config"
+	"deeptalk/internal/infra/metrics"
+	"deeptalk/internal/infra/mysql"
+	"deeptalk/internal/infra/redis"
 	"flag"
 	"fmt"
 	"log"
@@ -24,7 +25,7 @@ import (
 func main() {
 	setPath := flag.String("set", "eval/golden_example.json", "黄金集文件（JSON）")
 	user := flag.String("user", "", "用哪个账号的文档做检索（必填）")
-	modelType := flag.String("type", "2", "模型类型：1DeepSeek 2RAG 3MCP 4Ollama 5ReAct")
+	modelType := flag.String("type", "2", "模型类型：1 DeepSeek / 2 RAG / 6 Unified Agent")
 	judge := flag.Bool("judge", false, "额外用 LLM 给忠实度打分（更慢、更贵）")
 	intentOnly := flag.Bool("intentOnly", false, "只评测意图识别（规则层，本地零成本，秒级返回）")
 	intentLLM := flag.Bool("intentLLM", false, "意图评测时对低置信度用例调用真实模型跑兜底（少量调用）")
@@ -75,12 +76,12 @@ func main() {
 
 	// ---- 意图识别评测：先用规则层（本地零成本），可选再用真实模型跑兜底 ----
 	if *intentLLM && report.Intent != nil {
-		llm, err := aihelper.NewIntentLLM(ctx)
+		intentModel, err := decision.NewIntentLLM(ctx)
 		if err != nil {
 			log.Printf("构造意图兜底模型失败: %v", err)
 		} else {
 			fmt.Printf("\n>>> 对低置信度用例调用真实模型跑兜底...\n")
-			report.Intent.ApplyLLMFallback(ctx, llm)
+			report.Intent.ApplyLLMFallback(ctx, intentModel)
 			report.Metrics.IntentAccuracy = report.Intent.LLMAccuracy
 		}
 	}

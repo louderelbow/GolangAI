@@ -2,7 +2,7 @@ package user
 
 import (
 	"context"
-	"deeptalk/common/mysql"
+	"deeptalk/internal/infra/mysql"
 	"deeptalk/model"
 	"deeptalk/utils"
 

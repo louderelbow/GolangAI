@@ -1,19 +1,17 @@
 # DeepTalk
 
-一个基于 Go + Vue 3 构建的 AI 对话平台，采用工厂+策略模式统一调度 5 类大模型，集成 RAG 知识库检索、ReAct Agent 自主工具调用、MCP 协议、限流降级等功能。
+一个基于 Go + Vue 3 的多模型推理服务。项目采用 MVC 业务分层与 `internal/` 能力分层，统一支持纯对话、确定性 RAG 和 Unified Agent 三条执行路径。
 
 ## 功能特性
 
 | 模块 | 功能 |
 |------|------|
-| 🤖 多模型对话 | 工厂+策略模式统一调度 **DeepSeek / RAG / MCP / Ollama / ReAct Agent** 五类模型，新增模型一行注册 |
+| 🤖 多模型对话 | 统一调度 **DeepSeek / RAG / Agent** 三类模型 |
 | 📚 RAG 知识库 | 智能 Markdown 分片 → 火山方舟 Embedding → Redis Stack 向量索引 → LLM 关键词增强检索 → Prompt 生成，全链路降级 |
-| 🧠 ReAct Agent | Eino 原生 Agent 循环，4 个 InferTool（calculator/datetime/word_count/get_weather），MaxStep=5 自主推理 |
-| 🔌 MCP 协议 | 集成 mcp-go 协议，StreamableHTTP 传输，支持跨模型工具调用 |
+| 🧠 Agent | 融合原 MCP 与 ReAct 路径，通过原生 function calling 使用外部工具 |
+| 🔌 MCP 协议 | 集成 mcp-go StreamableHTTP/stdio 传输，支持工具白名单与多服务端 |
 | 🛡️ 限流降级 | Redis Token Bucket（Lua 原子性）+ 本地 sync.Map 降级，超限返回 429 |
 | 💾 记忆压缩 | Token 动态估算，超 4000 token 触发 LLM 摘要压缩，保留最近 3 轮原始对话 |
-| 🎤 语音合成 | 百度 TTS API，MD5 文本缓存，单次请求直接返回音频流 |
-| 🖼️ 图片识别 | 阿里云 DashScope 多模态 API（qwen-vl-plus），中文描述图片内容 |
 | 📝 消息持久化 | RabbitMQ 异步落库（队列持久化 + 手动 Ack），消息不丢 |
 | 🔐 用户系统 | 注册/登录，bcrypt 密码哈希，JWT 鉴权中间件 |
 | 🌊 SSE 流式 | 服务端 text/event-stream，前端 fetch ReadableStream 实时渲染 |
@@ -29,8 +27,6 @@
 | 消息队列 | RabbitMQ (AMQP, streadway/amqp) |
 | AI 框架 | CloudWeGo Eino (ChatModel / Embedding / Agent / Retriever) |
 | RAG | 自建分片 + Eino Embedding + Redis FT.SEARCH |
-| 图片识别 | 阿里云 DashScope qwen-vl-plus |
-| 语音合成 | 百度语音 API |
 | 认证 | JWT (golang-jwt/jwt v4) |
 | 限流 | Redis Lua Token Bucket + sync.Map 降级 |
 | MCP | mcp-go (StreamableHTTP) |
@@ -39,55 +35,31 @@
 
 ```
 DeepTalk/
-├── main.go                        # 入口：初始化 DB/Redis/MQ → 加载历史 → 启动 HTTP
+├── cmd/
+│   ├── server/main.go             # 唯一依赖组装与服务启动入口
+│   └── eval/main.go               # 离线评测 CLI
 ├── config/
-│   ├── config.go                  # TOML 单例配置（启动时一次性加载，零 IO）
 │   ├── config.toml.example        # 配置模板（真实 config.toml 由 .gitignore 排除）
 │   └── config.toml.docker         # Docker 部署用配置
-├── router/
-│   ├── router.go                  # 路由入口 + JWT/RequestID/RateLimit 中间件
-│   ├── AI.go                      # 聊天路由（8 个）
-│   ├── File.go                    # 文件上传路由
-│   ├── Image.go                   # 图片识别路由
-│   └── user.go                    # 用户路由（3 个）
-├── controller/                    # 控制器层（参数绑定 + 响应）
-│   ├── session/session.go
-│   ├── file/file.go
-│   ├── image/image.go
-│   ├── tts/tts.go
-│   ├── user/user.go
-│   └── common.go
-├── service/                       # 业务逻辑层
-│   ├── session/session.go
-│   ├── file/file.go
-│   ├── image/image.go
-│   └── user/user.go
+├── router/                        # 路由注册与中间件挂载
+├── controller/                    # HTTP 参数、JSON/SSE 编解码
+│   └── session/                   # dto/query/command/stream 分文件
+├── service/                       # 业务流程编排
+│   ├── chat/                      # 会话运行态、生成、计量、回收
+│   └── session/                   # 创建、查询、消息、流式业务
 ├── dao/                           # 数据访问层
-│   ├── message/message.go
-│   ├── session/session.go
-│   └── user/user.go
 ├── model/                         # GORM 数据模型
-├── common/                        # 通用组件
-│   ├── aihelper/                  # AI 核心
-│   │   ├── factory.go             #   工厂注册 5 模型
-│   │   ├── manager.go             #   嵌套 map + RWMutex 管理
-│   │   ├── aihelper.go            #   消息历史 + MQ 异步落库
-│   │   ├── model.go               #   5 个模型实现（OpenAI/RAG/MCP/Ollama/ReAct）
-│   │   ├── compressor.go          #   记忆压缩器
-│   │   └── tools.go               #   ReAct Agent 4 个 InferTool
-│   ├── rag/                       # RAG 检索（分片/Embedding/索引/检索）
-│   ├── tts/                       # 百度 TTS
-│   ├── image/                     # 阿里云 DashScope 多模态识别
-│   ├── mysql/                     # MySQL 连接池
-│   ├── redis/                     # Redis 连接
-│   ├── rabbitmq/                  # RabbitMQ（Work Queue + 手动 Ack）
-│   ├── email/                     # 邮件验证码
-│   ├── logger/                    # slog 封装（requestId 链路追踪）
-│   └── code/                      # 统一错误码
-├── middleware/
-│   ├── jwt/jwt.go                 # JWT 认证中间件
-│   ├── requestid.go               # RequestID 链路追踪中间件
-│   └── ratelimit.go              # Token Bucket 限流中间件
+├── internal/
+│   ├── llm/                       # 模型契约、DeepSeek、RAG、Unified、工厂
+│   ├── rag/                       # 分片、索引、混合检索、Prompt
+│   ├── decision/                  # 意图规则、LLM 兜底、判定缓存
+│   ├── agent/                     # core/memory/tool/skill/guard
+│   ├── inference/                 # 推理调度边界
+│   ├── cache/                     # 多级缓存边界与语义缓存
+│   ├── ratelimit/                 # 分布式限流边界
+│   └── infra/                     # config/logger/metrics/mysql/redis/MQ/MCP
+├── common/code/                   # 跨层稳定错误码
+├── middleware/                    # JWT、请求 ID、限流、请求大小限制
 ├── utils/                         # 工具函数（JWT/密码/随机数）
 ├── vue-frontend/                  # Vue 3 前端
 └── gopherai.sql                   # 数据库初始化
@@ -114,8 +86,8 @@ cp config/config.toml.example config/config.toml
 
 | 用途 | 读取位置 | 说明 |
 |------|----------|------|
-| **DeepSeek**（modelType 1 / 5 的对话模型） | `[deepSeekConfig]` → 环境变量 `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL_NAME` / `DEEPSEEK_API_KEY`（也兼容 `OPENAI_*`）→ 默认 `https://api.deepseek.com` + `deepseek-chat` | 配置留空即用环境变量；两者都支持 |
-| **阿里百炼**（modelType 2/3 的对话模型 + Embedding + 图片识别） | `[ragModelConfig] apiKey` → 环境变量 `ALIYUN_API_KEY` → `DEEPSEEK_API_KEY` → `OPENAI_API_KEY` | 建议只填 `ragModelConfig.apiKey` |
+| **DeepSeek**（modelType 1） | 环境变量 `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL_NAME` / `DEEPSEEK_API_KEY`（兼容 `OPENAI_*`） | 默认 `https://api.deepseek.com` + `deepseek-chat` |
+| **阿里百炼**（modelType 2/6 + Embedding） | `[ragModelConfig] apiKey` → `ALIYUN_API_KEY` → `DEEPSEEK_API_KEY` → `OPENAI_API_KEY` | 建议配置 `ragModelConfig.apiKey` |
 
 
 
@@ -134,7 +106,7 @@ mysql -u root -p < gopherai.sql
 ### 3. 启动后端
 
 ```bash
-go run main.go
+go run ./cmd/server
 # 服务运行在 http://localhost:9090
 ```
 
@@ -167,13 +139,11 @@ npm run serve
 | POST | `/api/v1/AI/chat/history` | 获取会话历史 |
 | POST | `/api/v1/AI/chat/send-stream-new-session` | 流式创建新会话（首个事件返回 `sessionId` + `modelType`） |
 | POST | `/api/v1/AI/chat/send-stream` | 流式发送（`modelType` 被忽略） |
-| POST | `/api/v1/AI/chat/tts/play` | 语音合成（文本 MD5 缓存，返回 audio/mp3 流） |
 
 ### 其他（需要 JWT）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/v1/image/recognize` | 图片识别（表单上传） |
 | POST | `/api/v1/file/upload` | 上传文件并构建 RAG 索引 |
 
 ### 模型类型说明
@@ -183,12 +153,10 @@ npm run serve
 | modelType | 模型 | 说明 |
 |-----------|------|------|
 | 1 | DeepSeek | OpenAI 兼容协议，默认聊天 |
-| 2 | 阿里百炼 RAG | 知识库检索增强生成 |
-| 3 | 阿里百炼 MCP | MCP 协议工具调用（需先启动 MCP 服务，见下） |
-| 4 | Ollama | 本地离线模型，地址/模型名可用 `OLLAMA_BASE_URL` / `OLLAMA_MODEL_NAME` 覆盖 |
-| 5 | ReAct Agent | Eino 原生 Agent + 4 工具 |
+| 2 | 确定性 RAG | 必然检索知识库并基于文档回答 |
+| 6 | Unified Agent | 统一的 Agent + MCP 工具执行路径 |
 
-未记录 `model_type` 的历史会话按默认模型 `2`（RAG）处理。
+未记录 `model_type` 的历史会话按 `2` 处理；历史 `3/5` 在执行时映射为 `6`，历史 `4` 映射为 `2`，数据库结构不变。
 
 ### 流式协议（SSE）
 
@@ -201,10 +169,10 @@ data: {"error": "错误信息"}
 data: [DONE]
 ```
 
-### MCP 服务（modelType=3 需要）
+### MCP 服务（modelType=6 可用）
 
 ```bash
-go run ./common/mcp -http-addr :8081
+go run ./internal/infra/mcp -http-addr :8081
 # 后端默认连接 http://localhost:8081/mcp，可用 MCP_BASE_URL 覆盖
 ```
 
@@ -270,7 +238,7 @@ maxStep = 5                        # Agent 最大推理步数
 - 启动时自动 `tools/list` 拉取工具清单，按白名单过滤后包装成 eino 工具
 - 多服务端时工具名自动加 `<server>__` 前缀避免重名
 - 某个服务端连不上只跳过它，不影响其它工具与普通对话；一个工具都没有时退化为普通聊天
-- 本项目自带的天气 MCP 服务：`go run ./common/mcp -http-addr :8081`
+- 本项目自带的 MCP 服务：`go run ./internal/infra/mcp -http-addr :8081`
 
 
 
@@ -291,7 +259,7 @@ maxStep = 5                        # Agent 最大推理步数
 影响面不止 Redis：**任何以超时形式出现的故障都不计数**，而超时恰恰是最常见的故障形态。
 回归测试见 `common/resilience/breaker_test.go` 的 `TestDeadlineExceededCountsAsFailure`。
 
-已接入：各 LLM（按模型名）、Redis 限流与配额、MCP 工具（按工具名）、图片识别 / 百度 TTS / 天气 / Embedding。
+已接入：各 LLM（按模型名）、Redis 限流与配额、MCP 工具（按工具名）与 Embedding。
 
 配置：`[resilience]`（`failureThreshold` / `failureRatio` / `timeoutSeconds` …），`disabled = true` 可整体关闭。
 指标：`deeptalk_circuit_breaker_state{name}`（0=closed 1=half-open 2=open）、`..._events_total`、`..._rejected_total`。
@@ -306,7 +274,6 @@ maxStep = 5                        # Agent 最大推理步数
 | `/AI/*` 请求体 | 64KB |
 | 问题长度 | ≤ 4000 字（`question`） |
 | TTS 文本 | ≤ 1000 字（超过百度 60 字/次上限时自动分片合成后拼接） |
-| 图片识别 | ≤ 8MB（超出返回参数错误） |
 | 文档上传 | ≤ 10MB（仅 `.md` / `.txt`） |
 | 验证码 | 同一邮箱 60 秒冷却，Redis 中 2 分钟有效 |
 | 会话列表 | 最多返回 200 条，按创建时间倒序 |
@@ -391,5 +358,3 @@ docker compose up -d --build
 1. **流式对话卡住** —— Nginx 必须 `proxy_buffering off`，否则 SSE 字节被攒着不发，用户要等整段回答生成完才看到内容
 2. **上传返回 413** —— Nginx 默认只允许 1MB 请求体，要显式设 `client_max_body_size 10m`
 3. **Redis 必须是 Redis Stack** —— RAG 向量检索依赖 RediSearch（`FT.CREATE`/`FT.SEARCH`），普通 `redis` 镜像没有这个模块
-
-

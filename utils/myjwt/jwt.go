@@ -1,7 +1,7 @@
 package myjwt
 
 import (
-	"deeptalk/config"
+	"deeptalk/internal/infra/config"
 	"errors"
 	"time"
 

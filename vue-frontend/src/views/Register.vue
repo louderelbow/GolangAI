@@ -17,7 +17,7 @@
             </svg>
           </div>
           <h1 class="app-name">DeepTalk</h1>
-          <p class="tagline">智能对话 · 多模型接入 · 语音交互</p>
+          <p class="tagline">智能对话 · 多模型接入 · 知识库增强</p>
           <div class="steps">
             <div class="step" v-for="(s, i) in steps" :key="i" :style="{ animationDelay: `${0.4 + i * 0.15}s` }">
               <span class="step-num">{{ i + 1 }}</span>

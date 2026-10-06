@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"deeptalk/config"
+	"deeptalk/internal/infra/config"
 	"deeptalk/model"
 
 	"github.com/cloudwego/eino/schema"
@@ -26,6 +26,7 @@ func setupConfig(t *testing.T) {
 	}
 	t.Setenv("DEEPTALK_CONFIG", example)
 }
+
 // ConvertToSchemaMessages 必须把"易变的当前时间"放在稳定前缀之后，
 // 否则每次都改写前缀，上游 prompt 前缀缓存永远命中不了。
 func TestConvertToSchemaMessagesKeepsStablePrefix(t *testing.T) {

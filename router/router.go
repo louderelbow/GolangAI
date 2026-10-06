@@ -1,10 +1,10 @@
 package router
 
 import (
-	"deeptalk/common/logger"
-	"deeptalk/common/metrics"
-	"deeptalk/middleware/jwt"
+	"deeptalk/internal/infra/logger"
+	"deeptalk/internal/infra/metrics"
 	mw "deeptalk/middleware"
+	"deeptalk/middleware/jwt"
 
 	"github.com/gin-gonic/gin"
 )
@@ -38,13 +38,6 @@ func InitRouter() *gin.Engine {
 		AIGroup.Use(mw.BodyLimit(mw.MaxJSONBodyBytes))
 		AIGroup.Use(mw.RateLimit())
 		AIRouter(AIGroup)
-	}
-
-	{
-		ImageGroup := enterRouter.Group("/image")
-		ImageGroup.Use(jwt.Auth())
-		ImageGroup.Use(mw.BodyLimit(mw.MaxUploadBodyBytes))
-		ImageRouter(ImageGroup)
 	}
 
 	{

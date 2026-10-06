@@ -48,21 +48,6 @@
           </span>
         </div>
 
-        <div class="card" @click="$router.push('/image-recognition')">
-          <div class="card-icon img-icon">
-            <svg viewBox="0 0 48 48" fill="none">
-              <rect x="4" y="8" width="40" height="32" rx="4" stroke="currentColor" stroke-width="2.5"/>
-              <circle cx="16" cy="20" r="5" stroke="currentColor" stroke-width="1.5"/>
-              <path d="M4 36l12-10 8 6 6-3 14 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </div>
-          <h3>图像识别</h3>
-          <p>上传图片 · AI 智能分析 · 精准识别</p>
-          <div class="card-badge">MobileNetV2</div>
-          <span class="card-arrow">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
-          </span>
-        </div>
       </div>
     </main>
 
@@ -264,7 +249,6 @@ export default {
 }
 
 .card:nth-child(1) { animation-delay: 0.3s; }
-.card:nth-child(2) { animation-delay: 0.45s; }
 
 @keyframes cardUp {
   from { opacity: 0; transform: translateY(40px); }
@@ -284,10 +268,6 @@ export default {
   background: radial-gradient(circle at 100% 0%, rgba(124, 58, 237, 0.12), transparent 70%);
 }
 
-.card:nth-child(2)::before {
-  background: radial-gradient(circle at 100% 0%, rgba(34, 197, 94, 0.1), transparent 70%);
-}
-
 .card:hover::before {
   opacity: 1;
 }
@@ -299,7 +279,6 @@ export default {
 }
 
 .card:nth-child(1):hover { border-color: rgba(124, 58, 237, 0.3); }
-.card:nth-child(2):hover { border-color: rgba(34, 197, 94, 0.25); }
 
 .card-icon {
   width: 56px;
@@ -321,17 +300,6 @@ export default {
 .card:hover .chat-icon {
   background: rgba(124, 58, 237, 0.2);
   box-shadow: 0 0 32px rgba(124, 58, 237, 0.15);
-}
-
-.img-icon {
-  background: rgba(34, 197, 94, 0.1);
-  color: #4ade80;
-  box-shadow: 0 0 24px rgba(34, 197, 94, 0.06);
-}
-
-.card:hover .img-icon {
-  background: rgba(34, 197, 94, 0.18);
-  box-shadow: 0 0 32px rgba(34, 197, 94, 0.12);
 }
 
 .card h3 {
@@ -360,11 +328,6 @@ export default {
 .card:nth-child(1) .card-badge {
   background: rgba(124, 58, 237, 0.12);
   color: #c4b5fd;
-}
-
-.card:nth-child(2) .card-badge {
-  background: rgba(34, 197, 94, 0.1);
-  color: #86efac;
 }
 
 .card-arrow {

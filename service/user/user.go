@@ -2,9 +2,9 @@ package user
 
 import (
 	"deeptalk/common/code"
-	myemail "deeptalk/common/email"
-	myredis "deeptalk/common/redis"
 	"deeptalk/dao/user"
+	myemail "deeptalk/internal/infra/email"
+	myredis "deeptalk/internal/infra/redis"
 	"deeptalk/model"
 	"deeptalk/utils"
 	"deeptalk/utils/myjwt"

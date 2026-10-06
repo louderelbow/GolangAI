@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"context"
-	"deeptalk/common/logger"
+	"deeptalk/internal/infra/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

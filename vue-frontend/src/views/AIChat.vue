@@ -86,9 +86,6 @@
         >
           <div class="bubble-meta">
             <span class="bubble-role">{{ message.role === 'user' ? '你' : 'AI' }}</span>
-            <button v-if="message.role === 'assistant'" class="tts-btn" @click="playTTS(message.content)">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
-            </button>
             <span v-if="message.meta && message.meta.status === 'streaming'" class="streaming-dot"></span>
           </div>
           <div class="bubble-content" v-html="renderMarkdown(message.content)"></div>
@@ -143,9 +140,7 @@ export default {
     const MODEL_OPTIONS = [
       { value: '1', label: 'DeepSeek' },
       { value: '2', label: '阿里百炼 RAG' },
-      { value: '3', label: '阿里百炼 MCP' },
-      { value: '4', label: 'Ollama' },
-      { value: '5', label: 'ReAct Agent' }
+      { value: '6', label: 'Unified Agent' }
     ]
 
     // 记住上次打开的会话：刷新页面后自动恢复，避免"记录看起来没了"
@@ -207,32 +202,6 @@ export default {
         .replace(/\*(.*?)\*/g, '<em>$1</em>')
         .replace(/`(.*?)`/g, '<code>$1</code>')
         .replace(/\n/g, '<br>')
-    }
-
-    let currentAudio = null
-
-    const stopAudio = () => {
-      if (currentAudio) {
-        currentAudio.pause()
-        currentAudio.currentTime = 0
-        currentAudio = null
-      }
-    }
-
-    const playTTS = async (text) => {
-      stopAudio()
-      try {
-        const response = await api.post('/AI/chat/tts/play', { text }, { responseType: 'blob' })
-        const blob = new Blob([response.data], { type: 'audio/mp3' })
-        const url = URL.createObjectURL(blob)
-        const audio = new Audio(url)
-        currentAudio = audio
-        audio.onended = () => URL.revokeObjectURL(url)
-        audio.play()
-      } catch (error) {
-        console.error('TTS error:', error)
-        ElMessage.error('请求语音接口失败')
-      }
     }
 
     const loadSessions = async () => {
@@ -561,7 +530,7 @@ export default {
       currentSessionId, tempSession, currentMessages, inputMessage, loading,
       messagesRef, messageInput, selectedModel, isStreaming, uploading, fileInput,
       MODEL_OPTIONS, modelSelectValue, modelLocked, modelHint,
-      dotStyle, renderMarkdown, playTTS, createNewSession, switchSession, syncHistory,
+      dotStyle, renderMarkdown, createNewSession, switchSession, syncHistory,
       sendMessage, triggerFileUpload, handleFileUpload
     }
   }
@@ -913,26 +882,6 @@ export default {
   opacity: 0.6;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-}
-
-.tts-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(124, 58, 237, 0.15);
-  color: #a78bfa;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.tts-btn:hover {
-  background: rgba(124, 58, 237, 0.3);
-  color: #c4b5fd;
-  transform: scale(1.1);
 }
 
 .streaming-dot {

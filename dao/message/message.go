@@ -1,7 +1,7 @@
 package message
 
 import (
-	"deeptalk/common/mysql"
+	"deeptalk/internal/infra/mysql"
 	"deeptalk/model"
 )
 

@@ -3,7 +3,6 @@ import Login from '../views/Login.vue'
 import Register from '../views/Register.vue'
 import Menu from '../views/Menu.vue'
 import AIChat from '../views/AIChat.vue'
-import ImageRecognition from '../views/ImageRecognition.vue'
 
 const routes = [
   {
@@ -30,12 +29,6 @@ const routes = [
     path: '/ai-chat',
     name: 'AIChat',
     component: AIChat,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/image-recognition',
-    name: 'ImageRecognition',
-    component: ImageRecognition,
     meta: { requiresAuth: true }
   }
 ]

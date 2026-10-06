@@ -2,7 +2,7 @@ package utils
 
 import (
 	"crypto/rand"
-	"deeptalk/config"
+	"deeptalk/internal/infra/config"
 	"deeptalk/model"
 	"fmt"
 	"math/big"

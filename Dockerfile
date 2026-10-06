@@ -28,7 +28,7 @@ COPY config/config.toml.docker config/config.toml
 # 注意这里**故意不加** -ldflags="-s -w"：那两个参数会剥掉符号表和调试信息，
 # 二进制会小一些，但 pprof 就再也看不到函数名了（profile 里全是地址）。
 # 排查性能问题的能力比省几 MB 重要。
-RUN CGO_ENABLED=0 go build -o deeptalk .
+RUN CGO_ENABLED=0 go build -o deeptalk ./cmd/server
 
 # ---------- 阶段 2：运行 ----------
 FROM alpine:latest

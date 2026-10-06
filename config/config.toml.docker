@@ -50,10 +50,6 @@ maxDistance = 0.7
 # 所有分片都没过阈值时至少保留几个最相关的
 fallbackTopN = 3
 
-[voiceServiceConfig]
-voiceServiceApiKey = ""
-voiceServiceSecretKey = ""
-
 # ============ 费用与配额 ============
 [aiPricing]
 defaultPromptPrice = 2.0

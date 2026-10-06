@@ -17,7 +17,7 @@
             </svg>
           </div>
           <h1 class="app-name">DeepTalk</h1>
-          <p class="tagline">智能对话 · 多模型接入 · 语音交互</p>
+          <p class="tagline">智能对话 · 多模型接入 · 知识库增强</p>
           <div class="features">
             <div class="feat" v-for="(f, i) in features" :key="i" :style="{ animationDelay: `${0.4 + i * 0.15}s` }">
               <span class="feat-dot"></span>
@@ -108,7 +108,7 @@ export default {
       '多模型 AI 对话（DeepSeek / 通义千问）',
       '流式实时响应 + SSE 推送',
       'RAG 文档增强问答',
-      '文字转语音播报'
+      '统一 Agent 工具调用'
     ]
 
     const loginRules = {

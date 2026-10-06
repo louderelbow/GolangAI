@@ -13,9 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"deeptalk/common/aihelper"
-	"deeptalk/common/rag"
-	"deeptalk/config"
+	"deeptalk/internal/decision"
+	"deeptalk/internal/infra/config"
+	"deeptalk/internal/llm"
+	"deeptalk/internal/rag"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 
@@ -241,7 +242,7 @@ func runCase(ctx context.Context, c Case, opts Options) (res CaseResult) {
 	}
 
 	// 3) 生成答案（走与线上一致的模型与提示词）
-	model, err := aihelper.GetGlobalFactory().CreateAIModel(ctx, modelType, map[string]interface{}{"username": opts.User})
+	model, err := llm.GetGlobalFactory().CreateAIModel(ctx, modelType, map[string]interface{}{"username": opts.User})
 	if err != nil {
 		res.Error = "create model failed: " + err.Error()
 		return res
@@ -251,7 +252,7 @@ func runCase(ctx context.Context, c Case, opts Options) (res CaseResult) {
 	// 所以只把原始问题交给它们；否则会把我们拼好的 RAG 提示词再套一层，
 	// 变成"拿整个提示词去检索"，既浪费又会污染评测结果。
 	var prompt string
-	if modelType == aihelper.ModelTypeRAG || modelType == aihelper.ModelTypeMCP {
+	if modelType == llm.ModelTypeRAG || modelType == llm.ModelTypeUnified {
 		prompt = c.Question
 	} else {
 		prompt = rag.BuildRAGPrompt(c.Question, docs)
@@ -306,7 +307,7 @@ func containsAny(text string, patterns []string) bool {
 }
 
 // judgeFaithfulness 用 LLM 给"是否忠实于参考资料"打分（0~1）
-func judgeFaithfulness(ctx context.Context, model aihelper.AIModel, docs []*schema.Document, answer string) float64 {
+func judgeFaithfulness(ctx context.Context, model llm.AIModel, docs []*schema.Document, answer string) float64 {
 	var ctxText strings.Builder
 	for i, d := range docs {
 		ctxText.WriteString(fmt.Sprintf("[文档 %d] %s\n", i+1, d.Content))
@@ -379,15 +380,15 @@ type IntentEval struct {
 	Confusion      map[string]map[string]int `json:"confusion"`
 	PerClass       map[string]ClassMetric    `json:"perClass"`
 	Wrong          []IntentCaseResult        `json:"wrong,omitempty"`
-	Results        []IntentCaseResult        `json:"results,omitempty"`            // 全部用例（用于算兜底后的准确率）
+	Results        []IntentCaseResult        `json:"results,omitempty"` // 全部用例（用于算兜底后的准确率）
 	LLMCorrect     int                       `json:"llmCorrect,omitempty"`
-	LLMAccuracy    float64                   `json:"llmAccuracy,omitempty"`    // 加入 LLM 兜底后的准确率
+	LLMAccuracy    float64                   `json:"llmAccuracy,omitempty"` // 加入 LLM 兜底后的准确率
 }
 
 // ApplyLLMFallback 对"规则层不确定"的用例调用真实模型重判，量化兜底带来的提升
 // 只对少量用例产生模型调用（实测约 7%），成本很小
-func (e *IntentEval) ApplyLLMFallback(ctx context.Context, llm einomodel.ToolCallingChatModel) {
-	if e == nil || llm == nil {
+func (e *IntentEval) ApplyLLMFallback(ctx context.Context, model einomodel.ToolCallingChatModel) {
+	if e == nil || model == nil {
 		return
 	}
 
@@ -395,7 +396,7 @@ func (e *IntentEval) ApplyLLMFallback(ctx context.Context, llm einomodel.ToolCal
 	for i := range e.Results {
 		r := &e.Results[i]
 		if !r.Confident {
-			res := aihelper.ClassifyIntent(ctx, r.Question, llm)
+			res := decision.ClassifyIntent(ctx, r.Question, model)
 			r.Predicted = string(res.Intent)
 			r.Correct = r.Predicted == r.Expected
 			r.Reason = "llm兜底: " + res.Reason
@@ -442,7 +443,7 @@ func RunIntentEval(set *Set) *IntentEval {
 		PerClass:  map[string]ClassMetric{},
 	}
 
-	for _, label := range aihelper.AllIntents() {
+	for _, label := range decision.AllIntents() {
 		e.Confusion[string(label)] = map[string]int{}
 	}
 
@@ -452,7 +453,7 @@ func RunIntentEval(set *Set) *IntentEval {
 			continue // 未标注期望意图的用例不参与
 		}
 
-		res, confident := aihelper.RuleIntentWithConfidence(c.Question)
+		res, confident := decision.RuleIntentWithConfidence(c.Question)
 		predicted := string(res.Intent)
 
 		e.Total++
@@ -489,7 +490,7 @@ func RunIntentEval(set *Set) *IntentEval {
 
 func (e *IntentEval) computePerClass() {
 	labels := make([]string, 0, 3)
-	for _, l := range aihelper.AllIntents() {
+	for _, l := range decision.AllIntents() {
 		labels = append(labels, string(l))
 	}
 
@@ -524,7 +525,7 @@ func (e *IntentEval) computePerClass() {
 // Matrix 输出文本混淆矩阵（行=期望，列=预测）
 func (e *IntentEval) Matrix() string {
 	labels := make([]string, 0, 3)
-	for _, l := range aihelper.AllIntents() {
+	for _, l := range decision.AllIntents() {
 		labels = append(labels, string(l))
 	}
 

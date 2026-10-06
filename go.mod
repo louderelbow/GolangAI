@@ -7,7 +7,6 @@ require (
 	github.com/cloudwego/eino v0.5.14
 	github.com/cloudwego/eino-ext/components/embedding/ark v0.1.0
 	github.com/cloudwego/eino-ext/components/indexer/redis v0.0.0-20251111090228-91a10bbc864f
-	github.com/cloudwego/eino-ext/components/model/ollama v0.1.5
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.4
 	github.com/cloudwego/eino-ext/components/retriever/redis v0.0.0-20251111090228-91a10bbc864f
 	github.com/gin-gonic/gin v1.11.0
@@ -36,7 +35,6 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eino-contrib/jsonschema v1.0.2 // indirect
-	github.com/eino-contrib/ollama v0.1.0 // indirect
 	github.com/evanphx/json-patch v0.5.2 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
 	github.com/getkin/kin-openapi v0.118.0 // indirect

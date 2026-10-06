@@ -2,7 +2,7 @@ package file
 
 import (
 	"context"
-	"deeptalk/common/rag"
+	"deeptalk/internal/rag"
 	"deeptalk/utils"
 	"io"
 	"log"

@@ -3,10 +3,10 @@ package middleware
 import (
 	"context"
 	"deeptalk/common/code"
-	myredis "deeptalk/common/redis"
-	"deeptalk/common/resilience"
-	"deeptalk/config"
 	"deeptalk/controller"
+	"deeptalk/internal/infra/config"
+	myredis "deeptalk/internal/infra/redis"
+	"deeptalk/internal/infra/resilience"
 	"log"
 	"net/http"
 	"sync"
