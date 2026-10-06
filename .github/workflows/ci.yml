@@ -47,14 +47,8 @@ jobs:
   # Job 2：意图识别准确率门禁
   # 失败含义：代码能跑，但效果劣化了 —— 这类问题比编译错误隐蔽得多
   #
-  # 为什么能在 CI 里跑：
-  #   -intentOnly 走纯本地规则层，不连 MySQL/Redis、不调用任何模型、
-  #   零成本、秒级返回，因此不需要任何 secrets 或外部服务。
-  #
   # 门禁机制：黄金集 eval/golden_example.json 里的 thresholds.intentAccuracy
   # 低于阈值时 CLI 退出码为 1，CI 即判定失败。
-  # 注意：CI 环境没有 config/config.toml（被 gitignore），
-  # config 会自动回退到 config/config.toml.example。
   # ============================================================
   eval-gate:
     name: 意图准确率门禁
