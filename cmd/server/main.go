@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"deeptalk/dao/message"
+	"deeptalk/internal/inference"
 	"deeptalk/internal/infra/config"
 	"deeptalk/internal/infra/diag"
 	"deeptalk/internal/infra/logger"
@@ -76,6 +77,12 @@ func main() {
 	rabbitmq.InitRabbitMQ()
 	log.Println("rabbitmq init success  ")
 
+	// 提前初始化推理调度器：池子与指标都在这一步建立。
+	// 不能等到第一个会话创建时才惰性初始化——那样启动后 /metrics 里
+	// 看不到 deeptalk_inference_*，也没法在接流量前确认调度参数。
+	infra := inference.Shared()
+	log.Printf("[inference] scheduler ready: enabled=%v", infra.Enabled())
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", host, port),
 		Handler:           router.InitRouter(),
@@ -100,10 +107,19 @@ func main() {
 
 	diag.ShutdownPprof(pprofSrv)
 
+	// 先让调度器停止接收新的推理请求（排队中的立刻被拒），
+	// 再等 HTTP 层把在途请求跑完——顺序反了的话，关闭期间还会有新请求排进队列。
+	infra.Close()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[main] graceful shutdown failed: %v", err)
+	}
+
+	// 兜底：HTTP 层已退出，正常在途推理应该都结束了
+	if !infra.Drain(10 * time.Second) {
+		log.Println("[main] 警告：仍有推理请求未在超时内结束")
 	}
 
 	// 日志是异步批量写的，退出前必须 flush，否则最后一批日志会丢

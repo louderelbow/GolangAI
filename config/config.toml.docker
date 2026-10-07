@@ -137,3 +137,27 @@ toolMaxAttempts = 2
 # 容器里留空表示不做模型切换（上游故障时直接返回错误码）。
 [llm]
 fallbackModels = []
+# ============ 推理请求调度 ============
+# 把"每个请求直接调用模型"改成"先排队、再按槽位分发"：
+# 上游并发可控；过载时快速失败，而不是所有请求一起超时。
+[inference]
+enabled = true
+queueTimeoutMs = 3000        # 排队超过此时长直接拒绝
+maxQueueDepth = 200          # 每个模型的队列长度上限，超出直接拒绝
+
+# 每个模型一个池子；未在这里列出的模型走默认值（并发 10）
+[inference.pools.qwen-turbo]
+maxConcurrent = 30
+weight = 10
+
+[inference.pools.deepseek-chat]
+maxConcurrent = 20
+weight = 10
+
+# 准入熔断：连续失败 N 次后在**入队之前**快速拒绝。
+# 与 [resilience] 的模型熔断分工不同：那个按失败率保护"调用"，
+# 这个按连续失败数避免把已知故障模型的队列排满。
+[inference.breaker]
+failureThreshold = 5
+openDurationMs = 10000
+halfOpenProbes = 3

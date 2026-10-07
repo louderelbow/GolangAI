@@ -156,6 +156,57 @@ type LLMConfig struct {
 	FallbackModels []string `toml:"fallbackModels"`
 }
 
+// InferencePoolConfig 单个模型的推理池配置
+type InferencePoolConfig struct {
+	MaxConcurrent int `toml:"maxConcurrent"` // 同时进行的请求数上限，超出排队
+	Weight        int `toml:"weight"`        // 多实例时的加权轮询权重
+}
+
+// InferenceBreakerConfig 调度层的准入熔断配置
+type InferenceBreakerConfig struct {
+	FailureThreshold int `toml:"failureThreshold"` // 连续失败多少次打开（默认 5）
+	OpenDurationMs   int `toml:"openDurationMs"`   // open 持续多久后允许半开探测（默认 10000）
+	HalfOpenProbes   int `toml:"halfOpenProbes"`   // 半开时允许的探测请求数（默认 3）
+}
+
+// InferenceConfig 推理请求调度配置（[inference] 段）
+//
+// 作用：把"每个请求直接调用模型"改成"先排队、再按槽位分发"，
+// 使上游并发可控、过载时快速失败而不是全部超时。
+type InferenceConfig struct {
+	Enabled        bool                           `toml:"enabled"`
+	QueueTimeoutMs int                            `toml:"queueTimeoutMs"` // 排队超过此时长直接拒绝（默认 3000）
+	MaxQueueDepth  int                            `toml:"maxQueueDepth"`  // 队列长度上限，超出直接拒绝（默认 200）
+	Pools          map[string]InferencePoolConfig `toml:"pools"`          // 按模型名配置
+	Breaker        InferenceBreakerConfig         `toml:"breaker"`
+}
+
+func (c InferenceConfig) withDefaults() InferenceConfig {
+	if c.QueueTimeoutMs <= 0 {
+		c.QueueTimeoutMs = 3000
+	}
+	if c.MaxQueueDepth <= 0 {
+		c.MaxQueueDepth = 200
+	}
+	if c.Breaker.FailureThreshold <= 0 {
+		c.Breaker.FailureThreshold = 5
+	}
+	if c.Breaker.OpenDurationMs <= 0 {
+		c.Breaker.OpenDurationMs = 10000
+	}
+	if c.Breaker.HalfOpenProbes <= 0 {
+		c.Breaker.HalfOpenProbes = 3
+	}
+	// 未配置的模型走一套保守默认值：有并发上限总比无限并发好
+	if c.Pools == nil {
+		c.Pools = map[string]InferencePoolConfig{}
+	}
+	return c
+}
+
+// GetInference 返回补全默认值后的调度配置。
+func (c *Config) GetInference() InferenceConfig { return c.InferenceConfig.withDefaults() }
+
 // ResilienceConfig 熔断器配置（基于 sony/gobreaker）
 // 默认开启；Disabled=true 时所有调用直连（只保留原有超时/降级逻辑）
 type ResilienceConfig struct {
@@ -209,6 +260,7 @@ type Config struct {
 	DebugConfig      `toml:"debug"`
 	AgentConfig      `toml:"agent"`
 	LLMConfig        `toml:"llm"`
+	InferenceConfig  `toml:"inference"`
 }
 
 // TolerantFloat 兼容 TOML 里把浮点字段写成整数的写法。

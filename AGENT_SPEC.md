@@ -540,7 +540,7 @@ PHASE-4：检索即工具 + 统一 Agent（type 6）+ Query Rewrite
 目标
 RAG 检索封装成工具 search_docs，Agent 自主决定是否调用
 
-新增 modelType 6 = Unified Agent
+新增 modelType 6 = Agent
 
 补上“识别了指代但不消解”的链路断层
 

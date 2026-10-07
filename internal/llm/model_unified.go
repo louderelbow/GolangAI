@@ -10,6 +10,7 @@ import (
 	agentcore "deeptalk/internal/agent/core"
 	"deeptalk/internal/agent/guard"
 	agenttool "deeptalk/internal/agent/tool"
+	"deeptalk/internal/inference"
 	"deeptalk/internal/infra/config"
 	"deeptalk/internal/infra/metrics"
 
@@ -18,13 +19,16 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// fallbackModels 按配置构造备用模型。
+// fallbackModels 按配置构造备用模型，返回模型与其名字（名字要用于调度池与日志）。
 //
 // 备用模型与主模型共用同一 baseURL / apiKey，只换模型名——这是"同一家上游
 // 换个更稳的型号"这一最常见兜底场景。构造失败的型号跳过并记日志，
 // 不让一个写错的型号名把整个 Agent 组装搞挂。
-func fallbackModels(ctx context.Context, conf *config.Config, baseURL, apiKey, primary string) []model.ToolCallingChatModel {
-	var out []model.ToolCallingChatModel
+func fallbackModels(ctx context.Context, conf *config.Config, baseURL, apiKey, primary string) ([]model.ToolCallingChatModel, []string) {
+	var (
+		models []model.ToolCallingChatModel
+		names  []string
+	)
 	for _, name := range conf.LLMConfig.FallbackModels {
 		if name == "" || name == primary {
 			continue
@@ -38,9 +42,10 @@ func fallbackModels(ctx context.Context, conf *config.Config, baseURL, apiKey, p
 			log.Printf("[agent] fallback model %s unavailable: %v", name, err)
 			continue
 		}
-		out = append(out, m)
+		models = append(models, m)
+		names = append(names, name)
 	}
-	return out
+	return models, names
 }
 
 // =================== Unified Agent 实现（原生 function calling） ===================
@@ -96,8 +101,20 @@ func NewUnifiedModel(ctx context.Context, username string) (*UnifiedModel, error
 	// 把 [agent] 里的工具策略下沉给工具层，避免每个工具重复配置
 	agenttool.Configure(time.Duration(ac.ToolTimeoutSeconds)*time.Second, ac.ToolMaxAttempts)
 
+	// 推理调度：进程级共享，包在**每个上游模型**外面而不是兜底链外面。
+	//
+	// 包在每个模型外面，各上游才有各自的并发上限；包在兜底链外面的话，
+	// 备用模型就绕过了自己的池子。
+	sched := inference.Shared()
+	fbModels, fbNames := fallbackModels(ctx, conf, baseURL, key, modelName)
+
+	scheduledFallbacks := make([]model.ToolCallingChatModel, 0, len(fbModels))
+	for i, fm := range fbModels {
+		scheduledFallbacks = append(scheduledFallbacks, sched.Wrap(fbNames[i], fm))
+	}
+
 	// 兜底链：主模型失败 → 原模型重试 → 依次尝试备用模型 → 错误码
-	chain := guard.NewFallbackModel(chat, fallbackModels(ctx, conf, baseURL, key, modelName), conf.LLMConfig.FallbackModels)
+	chain := guard.NewFallbackModel(sched.Wrap(modelName, chat), scheduledFallbacks, fbNames)
 
 	maxStep := ac.MaxSteps
 	if maxStep <= 0 {

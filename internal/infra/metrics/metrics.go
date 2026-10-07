@@ -23,15 +23,37 @@ import (
 type Labels map[string]string
 
 var (
-	mu       sync.Mutex
-	counters = map[string]*prometheus.CounterVec{}
-	gauges   = map[string]*prometheus.GaugeVec{}
-	hists    = map[string]*prometheus.HistogramVec{}
-	helps    = map[string]string{}
+	mu          sync.Mutex
+	counters    = map[string]*prometheus.CounterVec{}
+	gauges      = map[string]*prometheus.GaugeVec{}
+	hists       = map[string]*prometheus.HistogramVec{}
+	helps       = map[string]string{}
+	histBuckets = map[string][]float64{}
 )
 
 // defaultBuckets 直方图分桶（秒），与原实现保持一致，便于历史数据衔接。
 var defaultBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60}
+
+// SetHistogramBuckets 指定某个直方图的分桶。
+//
+// 分桶在 collector 首次注册时就固定了，因此必须在任何 Observe 之前调用；
+// 事后调用会被忽略并记日志，避免出现"以为改了其实没生效"。
+func SetHistogramBuckets(name string, buckets []float64) {
+	mu.Lock()
+	defer mu.Unlock()
+	if _, created := hists[name]; created {
+		log.Printf("[metrics] histogram %s already registered, buckets unchanged", name)
+		return
+	}
+	histBuckets[name] = buckets
+}
+
+func bucketsOf(name string) []float64 {
+	if b, ok := histBuckets[name]; ok && len(b) > 0 {
+		return b
+	}
+	return defaultBuckets
+}
 
 func sortedKeys(l Labels) []string {
 	keys := make([]string, 0, len(l))
@@ -118,7 +140,7 @@ func histVec(name string, labels Labels) *prometheus.HistogramVec {
 	vec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    name,
 		Help:    helpOf(name),
-		Buckets: defaultBuckets,
+		Buckets: bucketsOf(name),
 	}, keys)
 	if err := prometheus.Register(vec); err != nil {
 		if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
