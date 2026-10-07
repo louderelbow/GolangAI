@@ -17,10 +17,10 @@ const (
 )
 
 var (
-	connMu         sync.Mutex
-	conn           *amqp.Connection
-	lastDialErr    error
-	lastDialTry    time.Time
+	connMu      sync.Mutex
+	conn        *amqp.Connection
+	lastDialErr error
+	lastDialTry time.Time
 )
 
 // dial 建立连接（带超时：amqp.Dial 默认没有超时，网络异常时会挂很久）

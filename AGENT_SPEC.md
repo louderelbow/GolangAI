@@ -138,11 +138,10 @@ internal/
       budget.go
       fallback.go
 
-  decision/                       ★ 快速决策层
-    decider.go
-    openai_compat.go
-    cache.go
-    fallback.go
+  decision/                       意图识别（规则层 + 主模型兜底）
+    intent.go                     规则层：加权词表 / 整词匹配 / 指代与元问题守卫
+    llm_intent.go                 LLM 兜底：function calling 结构化输出
+    cache.go                      判定结果 TTL 缓存
 
   llm/                            ★ 模型接入
     llmcore/
@@ -203,7 +202,7 @@ ratelimit    → infra/redis, infra/config
 inference    → llmcore, infra/config, infra/metrics, infra/resilience
 agent/tool   → llmcore, rag, cache
 agent/memory → llmcore, infra/config
-agent/core   → llmcore, agent/tool, agent/memory, agent/guard, decision(可用), inference
+agent/core   → llmcore, agent/tool, agent/memory, agent/guard, decision(意图预判，可选), inference
 agent/skill  → agent/tool
 llm          → llmcore, agent/core, rag, inference, cache, ratelimit
 service      → llm, dao
@@ -370,25 +369,6 @@ type RetryPolicy struct {
     BackoffBase  time.Duration
     AllowReplan  bool
 }
-3.3.7 Decider（internal/decision/decider.go）
-go
-type Decider interface {
-    Score(ctx context.Context, question string, options []Option) ([]Scored, error)
-    Pick(ctx context.Context, question string, options []Option) (Option, error)
-}
-
-type Option struct {
-    ID          string
-    Description string
-}
-
-type Scored struct {
-    ID     string
-    Score  float64
-    Reason string
-}
-三个使用点：意图判定、工具预筛、多 Agent 分派（可选）。
-
 4. PHASE 清单
 每个 PHASE 的“验收”必须可自动执行，不允许“人工看一眼觉得对”。
 
@@ -827,7 +807,7 @@ system 不被裁	任何情况下 system 完整保留
 跳过 PHASE-3 直接做 PHASE-5/6	没有调度器，缓存和限流无意义
 跳过 PHASE-7 直接做多 Agent	没有轨迹评测无法证明有效性
 破坏已有 HTTP/JSON/TOML/指标契约	违反 C1
-让单个 skill / 决策调用失败导致启动失败	违反可用性要求
+让单个 skill 装载失败 / 意图判定失败导致启动失败或对话失败	违反可用性要求
 引入 DI 框架、DDD 全套	过度设计
 为每个类型生成 interface	只对边界抽接口
 把新增能力写成“实现了但无法验证”	违反 C7
@@ -850,8 +830,8 @@ system 不被裁	任何情况下 system 完整保留
 □ 产出 缓存命中率与成本下降数据
 □ 产出 分布式限流压测数据
 □ config/skills/ 下至少 1 个可用 skill
-□ [decision] 配置可插拔，失联时不降级功能
-□ README.md 补充：Agent 能力、Skill 扩展、决策层配置、评测指标、性能数据
+□ 意图识别在配置缺失 / 模型不可用时降级为默认意图，不阻断对话
+□ README.md 补充：Agent 能力、Skill 扩展、意图识别配置、评测指标、性能数据
 □ config/config.toml.example 补充全部新增配置项并加注释
 7. 输出要求
 每个 PHASE 完成后输出以下结构，不得包含多余解释：

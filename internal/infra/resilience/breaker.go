@@ -7,8 +7,8 @@ package resilience
 
 import (
 	"context"
-	"deeptalk/internal/infra/metrics"
 	"deeptalk/internal/infra/config"
+	"deeptalk/internal/infra/metrics"
 	"errors"
 	"fmt"
 	"log"

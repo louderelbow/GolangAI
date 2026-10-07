@@ -24,8 +24,8 @@ import (
 // 返回的 Server 需要在退出时调用 Shutdown。
 func StartPprof(addr string) *http.Server {
 	// 开启阻塞与锁竞争采样（默认关闭）。采样有性能开销，所以只在显式打开诊断时启用。
-	runtime.SetBlockProfileRate(1)          // 每次阻塞事件都记录（1 = 全采样）
-	runtime.SetMutexProfileFraction(1)      // 每次锁竞争都记录
+	runtime.SetBlockProfileRate(1)     // 每次阻塞事件都记录（1 = 全采样）
+	runtime.SetMutexProfileFraction(1) // 每次锁竞争都记录
 
 	// 用独立 mux，只暴露 pprof，不把 DefaultServeMux 上的任何其它东西带出去
 	mux := http.NewServeMux()

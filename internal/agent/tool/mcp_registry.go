@@ -177,3 +177,21 @@ func (r *MCPRegistry) load(ctx context.Context) {
 	r.loadedAt = time.Now()
 	log.Printf("[MCP] registry ready: %d tools from %d servers", len(tools), len(r.servers))
 }
+
+// ======================== 接入通用工具注册表 ========================
+
+// AsSource 把 MCP 注册表适配成通用的工具来源。
+//
+// 这样 Agent 只认识 tool.Registry，不关心工具来自本地代码还是 MCP 服务端；
+// 将来接入新的工具来源只需实现 Source 接口。
+func (r *MCPRegistry) AsSource() Source { return mcpSource{registry: r} }
+
+type mcpSource struct {
+	registry *MCPRegistry
+}
+
+func (s mcpSource) Name() string { return "mcp" }
+
+func (s mcpSource) Tools(ctx context.Context) []tool.BaseTool {
+	return s.registry.Tools(ctx)
+}

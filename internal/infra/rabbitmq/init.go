@@ -3,7 +3,6 @@ package rabbitmq
 import "log"
 
 var (
-
 	RMQMessage *RabbitMQ
 )
 

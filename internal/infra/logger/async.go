@@ -27,8 +27,8 @@ import (
 //   - 队列满时**丢弃**而不是阻塞——日志不能反过来把业务拖死，丢了多少条会计数。
 
 const (
-	defaultQueueSize  = 4096             // 队列长度（条）
-	defaultBufSize    = 64 << 10         // 攒到 64KB 就写一次
+	defaultQueueSize  = 4096     // 队列长度（条）
+	defaultBufSize    = 64 << 10 // 攒到 64KB 就写一次
 	defaultFlushEvery = 200 * time.Millisecond
 )
 

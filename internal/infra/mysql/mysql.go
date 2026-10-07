@@ -1,8 +1,8 @@
 package mysql
 
 import (
-	applogger "deeptalk/internal/infra/logger"
 	"deeptalk/internal/infra/config"
+	applogger "deeptalk/internal/infra/logger"
 	"deeptalk/model"
 	"fmt"
 	stdlog "log"

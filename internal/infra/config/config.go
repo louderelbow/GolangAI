@@ -146,21 +146,21 @@ func (c ResilienceConfig) withDefaults() ResilienceConfig {
 }
 
 type Config struct {
-	EmailConfig        `toml:"emailConfig"`
-	RedisConfig        `toml:"redisConfig"`
-	MysqlConfig        `toml:"mysqlConfig"`
-	JwtConfig          `toml:"jwtConfig"`
-	MainConfig         `toml:"mainConfig"`
-	Rabbitmq           `toml:"rabbitmqConfig"`
-	RagModelConfig     `toml:"ragModelConfig"`
-	AiPricingConfig    `toml:"aiPricing"`
-	AiPromptConfig     `toml:"aiPrompt"`
-	SemanticCache      SemanticCacheConfig `toml:"semanticCache"`
-	McpConfig          `toml:"mcpConfig"`
-	ResilienceConfig   `toml:"resilience"`
-	IntentConfig       `toml:"intentConfig"`
-	RateLimitConfig    `toml:"rateLimit"`
-	DebugConfig        `toml:"debug"`
+	EmailConfig      `toml:"emailConfig"`
+	RedisConfig      `toml:"redisConfig"`
+	MysqlConfig      `toml:"mysqlConfig"`
+	JwtConfig        `toml:"jwtConfig"`
+	MainConfig       `toml:"mainConfig"`
+	Rabbitmq         `toml:"rabbitmqConfig"`
+	RagModelConfig   `toml:"ragModelConfig"`
+	AiPricingConfig  `toml:"aiPricing"`
+	AiPromptConfig   `toml:"aiPrompt"`
+	SemanticCache    SemanticCacheConfig `toml:"semanticCache"`
+	McpConfig        `toml:"mcpConfig"`
+	ResilienceConfig `toml:"resilience"`
+	IntentConfig     `toml:"intentConfig"`
+	RateLimitConfig  `toml:"rateLimit"`
+	DebugConfig      `toml:"debug"`
 }
 
 // TolerantFloat 兼容 TOML 里把浮点字段写成整数的写法。
