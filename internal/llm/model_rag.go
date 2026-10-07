@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"deeptalk/internal/decision"
+	"deeptalk/internal/inference"
 	"deeptalk/internal/infra/config"
 	"deeptalk/internal/rag"
 
@@ -47,8 +48,11 @@ func NewAliRAGModel(ctx context.Context, username string) (*AliRAGModel, error) 
 	if err != nil {
 		return nil, fmt.Errorf("create ali rag model failed: %v", err)
 	}
+	// 推理调度必须覆盖**所有**模型路径：只包 Agent 的话，
+	// 走 RAG/DeepSeek 的请求会完全绕过并发上限与排队。
+	var scheduled model.ToolCallingChatModel = inference.Shared().Wrap(modelName, llm)
 	return &AliRAGModel{
-		llm:      llm,
+		llm:      scheduled,
 		name:     modelName,
 		username: username,
 	}, nil

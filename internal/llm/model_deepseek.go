@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"deeptalk/internal/inference"
+
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -56,7 +58,9 @@ func NewOpenAIModel(ctx context.Context) (*OpenAIModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create deepseek model failed: %v", err)
 	}
-	return &OpenAIModel{llm: llm, name: modelName}, nil
+	// 与 RAG 路径一致：所有模型调用都要经过推理调度器
+	var scheduled model.ToolCallingChatModel = inference.Shared().Wrap(modelName, llm)
+	return &OpenAIModel{llm: scheduled, name: modelName}, nil
 }
 
 func (o *OpenAIModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
