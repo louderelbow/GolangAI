@@ -5,14 +5,43 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	agentcore "deeptalk/internal/agent/core"
+	"deeptalk/internal/agent/guard"
 	agenttool "deeptalk/internal/agent/tool"
 	"deeptalk/internal/infra/config"
+	"deeptalk/internal/infra/metrics"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
+
+// fallbackModels 按配置构造备用模型。
+//
+// 备用模型与主模型共用同一 baseURL / apiKey，只换模型名——这是"同一家上游
+// 换个更稳的型号"这一最常见兜底场景。构造失败的型号跳过并记日志，
+// 不让一个写错的型号名把整个 Agent 组装搞挂。
+func fallbackModels(ctx context.Context, conf *config.Config, baseURL, apiKey, primary string) []model.ToolCallingChatModel {
+	var out []model.ToolCallingChatModel
+	for _, name := range conf.LLMConfig.FallbackModels {
+		if name == "" || name == primary {
+			continue
+		}
+		m, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+			BaseURL: baseURL,
+			Model:   name,
+			APIKey:  apiKey,
+		})
+		if err != nil {
+			log.Printf("[agent] fallback model %s unavailable: %v", name, err)
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
 
 // =================== Unified Agent 实现（原生 function calling） ===================
 //
@@ -63,22 +92,37 @@ func NewUnifiedModel(ctx context.Context, username string) (*UnifiedModel, error
 	registry.AddSource(agenttool.GetMCPRegistry().AsSource())
 	tools := registry.Tools(ctx)
 
-	maxStep := conf.McpConfig.MaxStep
+	ac := conf.GetAgent()
+	// 把 [agent] 里的工具策略下沉给工具层，避免每个工具重复配置
+	agenttool.Configure(time.Duration(ac.ToolTimeoutSeconds)*time.Second, ac.ToolMaxAttempts)
+
+	// 兜底链：主模型失败 → 原模型重试 → 依次尝试备用模型 → 错误码
+	chain := guard.NewFallbackModel(chat, fallbackModels(ctx, conf, baseURL, key, modelName), conf.LLMConfig.FallbackModels)
+
+	maxStep := ac.MaxSteps
 	if maxStep <= 0 {
 		maxStep = 5
 	}
 
 	agent, err := agentcore.NewReActAgent(ctx, agentcore.ReActConfig{
-		Model:   chat,
+		Model:   chain,
 		Tools:   tools,
 		MaxStep: maxStep,
+		Limits: guard.Limits{
+			MaxSteps:     ac.MaxSteps,
+			MaxTokens:    ac.MaxTokens,
+			MaxWallClock: time.Duration(ac.MaxWallClockSeconds) * time.Second,
+			ModelTimeout: time.Duration(ac.ModelTimeoutSeconds) * time.Second,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create unified agent failed: %v", err)
 	}
 
 	if len(tools) == 0 {
-		// 没有任何工具时退化为普通对话，而不是直接报错
+		// 没有工具时确实退化成了普通对话：这是配置/上游的问题，
+		// 用指标暴露出来，否则"Agent 其实没在调工具"完全看不出来
+		metrics.CountAgentDegraded("plain_chat")
 		log.Printf("[MCP] no tools available, fallback to plain chat (user=%s)", username)
 	}
 	log.Printf("[MCP] agent ready: user=%s tools=%d maxStep=%d", username, len(tools), maxStep)

@@ -1,246 +1,175 @@
+// Package metrics 提供业务与 Agent 可靠性指标的采集与暴露。
+//
+// 实现基于官方 Prometheus client_golang：指标对象注册到默认 registry，
+// /metrics 由 promhttp 渲染，因此天然带上 go_* / process_* 运行时指标，
+// 输出格式也由官方库保证，不再自行拼接文本。
+//
+// 对调用方保留便捷函数（Count / SetGauge / Observe / RecordAIRequest …），
+// 业务代码不需要知道底层用的是哪个指标库。
 package metrics
 
 import (
-	"fmt"
+	"log"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// ======================== 轻量指标注册表 ========================
-//
-// 用法：
-//   metrics.Count("deeptalk_ai_requests_total", metrics.Labels{"model": "deepseek-chat", "status": "ok"}, 1)
-//   metrics.Observe("deeptalk_ai_request_duration_seconds", metrics.Labels{"model": "..."}, seconds)
-
+// Labels 标签集。
 type Labels map[string]string
 
-type series struct {
-	name   string
-	labels string // 已渲染好的 {k="v",...}（含大括号，无标签时为空串）
-	value  float64
-}
+var (
+	mu       sync.Mutex
+	counters = map[string]*prometheus.CounterVec{}
+	gauges   = map[string]*prometheus.GaugeVec{}
+	hists    = map[string]*prometheus.HistogramVec{}
+	helps    = map[string]string{}
+)
 
-type histogram struct {
-	name    string
-	labels  string
-	buckets []float64
-	counts  []float64
-	sum     float64
-	count   float64
-}
-
-type Registry struct {
-	mu         sync.Mutex
-	counters   map[string]*series
-	gauges     map[string]*series
-	histograms map[string]*histogram
-
-	help map[string]string
-	typ  map[string]string
-}
-
+// defaultBuckets 直方图分桶（秒），与原实现保持一致，便于历史数据衔接。
 var defaultBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60}
 
-func NewRegistry() *Registry {
-	return &Registry{
-		counters:   make(map[string]*series),
-		gauges:     make(map[string]*series),
-		histograms: make(map[string]*histogram),
-		help:       make(map[string]string),
-		typ:        make(map[string]string),
-	}
-}
-
-var defaultRegistry = NewRegistry()
-
-// Default 返回默认注册表
-func Default() *Registry { return defaultRegistry }
-
-func renderLabels(l Labels) string {
-	if len(l) == 0 {
-		return ""
-	}
+func sortedKeys(l Labels) []string {
 	keys := make([]string, 0, len(l))
 	for k := range l {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		v := strings.ReplaceAll(l[k], `\`, `\\`)
-		v = strings.ReplaceAll(v, `"`, `\"`)
-		parts = append(parts, fmt.Sprintf(`%s="%s"`, k, v))
+	return keys
+}
+
+func helpOf(name string) string {
+	if h := helps[name]; h != "" {
+		return h
 	}
-	return "{" + strings.Join(parts, ",") + "}"
+	return name
 }
 
-func seriesKey(name, labels string) string { return name + labels }
-
-// Describe 登记指标的 HELP/TYPE（可选，只为输出更好看）
-func (r *Registry) Describe(name, help, typ string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.help[name] = help
-	r.typ[name] = typ
+// Describe 登记指标的 HELP 文案（可选；未登记时用指标名兜底）。
+// 可变参数是为了兼容旧的 Describe(name, help, type) 调用形式——类型由
+// client_golang 的 collector 决定，不再需要显式声明。
+// 必须在首次记录该指标之前调用效果最好——client_golang 的 HELP 在注册时固定。
+func Describe(name, help string, _ ...string) {
+	mu.Lock()
+	defer mu.Unlock()
+	helps[name] = help
 }
 
-// Count 计数器累加
-func (r *Registry) Count(name string, labels Labels, delta float64) {
-	key := seriesKey(name, renderLabels(labels))
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	s, ok := r.counters[key]
+func labelsOf(l Labels) prometheus.Labels {
+	if len(l) == 0 {
+		return nil
+	}
+	return prometheus.Labels(l)
+}
+
+// register 三种 Vec 共用的注册逻辑：已存在同名 collector 时复用，
+// 避免"重复 init / 重复调用 RegisterHelp"直接 panic。
+func counterVec(name string, labels Labels) *prometheus.CounterVec {
+	mu.Lock()
+	defer mu.Unlock()
+	if v, ok := counters[name]; ok {
+		return v
+	}
+	keys := sortedKeys(labels)
+	vec := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: helpOf(name)}, keys)
+	if err := prometheus.Register(vec); err != nil {
+		if reused, ok := reuseCounter(err); ok {
+			counters[name] = reused
+			return reused
+		}
+		log.Printf("[metrics] register counter %s failed: %v", name, err)
+	}
+	counters[name] = vec
+	return vec
+}
+
+func gaugeVec(name string, labels Labels) *prometheus.GaugeVec {
+	mu.Lock()
+	defer mu.Unlock()
+	if v, ok := gauges[name]; ok {
+		return v
+	}
+	keys := sortedKeys(labels)
+	vec := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: name, Help: helpOf(name)}, keys)
+	if err := prometheus.Register(vec); err != nil {
+		if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			if reused, ok := are.ExistingCollector.(*prometheus.GaugeVec); ok {
+				gauges[name] = reused
+				return reused
+			}
+		}
+		log.Printf("[metrics] register gauge %s failed: %v", name, err)
+	}
+	gauges[name] = vec
+	return vec
+}
+
+func histVec(name string, labels Labels) *prometheus.HistogramVec {
+	mu.Lock()
+	defer mu.Unlock()
+	if v, ok := hists[name]; ok {
+		return v
+	}
+	keys := sortedKeys(labels)
+	vec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    name,
+		Help:    helpOf(name),
+		Buckets: defaultBuckets,
+	}, keys)
+	if err := prometheus.Register(vec); err != nil {
+		if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			if reused, ok := are.ExistingCollector.(*prometheus.HistogramVec); ok {
+				hists[name] = reused
+				return reused
+			}
+		}
+		log.Printf("[metrics] register histogram %s failed: %v", name, err)
+	}
+	hists[name] = vec
+	return vec
+}
+
+func reuseCounter(err error) (*prometheus.CounterVec, bool) {
+	are, ok := err.(prometheus.AlreadyRegisteredError)
 	if !ok {
-		s = &series{name: name, labels: renderLabels(labels)}
-		r.counters[key] = s
-		if _, exists := r.typ[name]; !exists {
-			r.typ[name] = "counter"
-		}
+		return nil, false
 	}
-	s.value += delta
+	reused, ok := are.ExistingCollector.(*prometheus.CounterVec)
+	return reused, ok
 }
 
-// SetGauge 设置瞬时值
-func (r *Registry) SetGauge(name string, labels Labels, value float64) {
-	key := seriesKey(name, renderLabels(labels))
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	s, ok := r.gauges[key]
-	if !ok {
-		s = &series{name: name, labels: renderLabels(labels)}
-		r.gauges[key] = s
-		if _, exists := r.typ[name]; !exists {
-			r.typ[name] = "gauge"
-		}
-	}
-	s.value = value
+// Count 计数器累加。
+func Count(name string, labels Labels, delta float64) {
+	counterVec(name, labels).With(labelsOf(labels)).Add(delta)
 }
 
-// Observe 观测值（用于直方图，如耗时）
-func (r *Registry) Observe(name string, labels Labels, v float64) {
-	key := seriesKey(name, renderLabels(labels))
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	h, ok := r.histograms[key]
-	if !ok {
-		h = &histogram{
-			name:    name,
-			labels:  renderLabels(labels),
-			buckets: defaultBuckets,
-			counts:  make([]float64, len(defaultBuckets)),
-		}
-		r.histograms[key] = h
-		if _, exists := r.typ[name]; !exists {
-			r.typ[name] = "histogram"
-		}
-	}
-	for i, b := range h.buckets {
-		if v <= b {
-			h.counts[i]++
-		}
-	}
-	h.sum += v
-	h.count++
+// SetGauge 设置瞬时值。
+func SetGauge(name string, labels Labels, value float64) {
+	gaugeVec(name, labels).With(labelsOf(labels)).Set(value)
 }
 
-// Snapshot 导出为 Prometheus 文本格式
-func (r *Registry) Snapshot() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	var sb strings.Builder
-	written := map[string]bool{}
-
-	writeHeader := func(name string) {
-		if written[name] {
-			return
-		}
-		written[name] = true
-		if help, ok := r.help[name]; ok {
-			fmt.Fprintf(&sb, "# HELP %s %s\n", name, help)
-		}
-		if typ, ok := r.typ[name]; ok {
-			fmt.Fprintf(&sb, "# TYPE %s %s\n", name, typ)
-		}
-	}
-
-	nameSet := map[string]struct{}{}
-	for _, s := range r.counters {
-		nameSet[s.name] = struct{}{}
-	}
-	for _, s := range r.gauges {
-		nameSet[s.name] = struct{}{}
-	}
-	for _, h := range r.histograms {
-		nameSet[h.name] = struct{}{}
-	}
-	for name := range r.help {
-		nameSet[name] = struct{}{}
-	}
-	for name := range r.typ {
-		nameSet[name] = struct{}{}
-	}
-
-	names := make([]string, 0, len(nameSet))
-	for n := range nameSet {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		writeHeader(n)
-	}
-
-	emit := func(items map[string]*series) {
-		keys := make([]string, 0, len(items))
-		for k := range items {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			s := items[k]
-			fmt.Fprintf(&sb, "%s%s %g\n", s.name, s.labels, s.value)
-		}
-	}
-	emit(r.counters)
-	emit(r.gauges)
-
-	hkeys := make([]string, 0, len(r.histograms))
-	for k := range r.histograms {
-		hkeys = append(hkeys, k)
-	}
-	sort.Strings(hkeys)
-	for _, k := range hkeys {
-		h := r.histograms[k]
-		for i, b := range h.buckets {
-			fmt.Fprintf(&sb, "%s_bucket%s %g\n", h.name, mergeLabel(h.labels, "le", fmt.Sprintf("%g", b)), h.counts[i])
-		}
-		fmt.Fprintf(&sb, "%s_bucket%s %g\n", h.name, mergeLabel(h.labels, "le", "+Inf"), h.count)
-		fmt.Fprintf(&sb, "%s_sum%s %g\n", h.name, h.labels, h.sum)
-		fmt.Fprintf(&sb, "%s_count%s %g\n", h.name, h.labels, h.count)
-	}
-
-	return sb.String()
+// Observe 记录一次观测值（耗时等）。
+func Observe(name string, labels Labels, v float64) {
+	histVec(name, labels).With(labelsOf(labels)).Observe(v)
 }
 
-func mergeLabel(labels, key, value string) string {
-	if labels == "" {
-		return fmt.Sprintf(`{%s="%s"}`, key, value)
-	}
-	return labels[:len(labels)-1] + fmt.Sprintf(`,%s="%s"}`, key, value)
+// EnsureHistogram 预创建直方图序列（count/sum 为 0）。
+// 让 /metrics 在没有流量时也能看到完整分桶，而不是只有 HELP/TYPE 空壳。
+func EnsureHistogram(name string, labels Labels) {
+	histVec(name, labels).With(labelsOf(labels))
 }
 
-// Handler 暴露 /metrics（Prometheus 文本格式）
-func Handler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = w.Write([]byte(defaultRegistry.Snapshot()))
-	}
+// Handler 暴露 /metrics：由 promhttp 渲染标准 Prometheus 文本格式，
+// 同时包含 go_* / process_* 运行时指标。
+func Handler() http.Handler {
+	return promhttp.Handler()
 }
 
-// ======================== AI 业务指标 ========================
+// ======================== 指标名 ========================
 
 const (
 	MetricAIRequests    = "deeptalk_ai_requests_total"
@@ -254,28 +183,66 @@ const (
 	MetricCBState    = "deeptalk_circuit_breaker_state"          // 0=closed 1=half-open 2=open
 	MetricCBEvents   = "deeptalk_circuit_breaker_events_total"   // 状态迁移次数
 	MetricCBRejected = "deeptalk_circuit_breaker_rejected_total" // 因熔断被快速拒绝的次数
+
+	// Agent 可靠性（PHASE-2）
+	MetricAgentBudgetExceeded = "deeptalk_agent_budget_exceeded_total" // 预算耗尽，labels: reason=steps|tokens|wallclock
+	MetricAgentToolRetry      = "deeptalk_agent_tool_retry_total"      // 工具重试，labels: tool, result=success|fail
+	MetricAgentDegraded       = "deeptalk_agent_degraded_total"        // 降级，labels: level=retry|fallback_model|plain_chat|error
+	MetricAgentTimeout        = "deeptalk_agent_timeout_total"         // 超时，labels: kind=tool|model|turn
 )
+
+// ======================== Agent 可靠性便捷计数 ========================
+//
+// 把 label 取值集中在一处，避免各调用点拼错导致指标分裂成多条时间线。
+
+// CountAgentBudgetExceeded 记录一次预算耗尽。reason 取 steps / tokens / wallclock。
+func CountAgentBudgetExceeded(reason string) {
+	Count(MetricAgentBudgetExceeded, Labels{"reason": reason}, 1)
+}
+
+// CountAgentToolRetry 记录一次工具重试结果。
+func CountAgentToolRetry(tool string, ok bool) {
+	result := "fail"
+	if ok {
+		result = "success"
+	}
+	Count(MetricAgentToolRetry, Labels{"tool": tool, "result": result}, 1)
+}
+
+// CountAgentDegraded 记录一次降级。level 取 retry / fallback_model / plain_chat / error。
+func CountAgentDegraded(level string) {
+	Count(MetricAgentDegraded, Labels{"level": level}, 1)
+}
+
+// CountAgentTimeout 记录一次超时。kind 取 tool / model / turn。
+func CountAgentTimeout(kind string) {
+	Count(MetricAgentTimeout, Labels{"kind": kind}, 1)
+}
+
+// ======================== 熔断器 ========================
 
 var cbStateValue = map[string]float64{"closed": 0, "half-open": 1, "open": 2}
 
-// SetCircuitState 记录熔断器当前状态（供 /metrics 暴露）
+// SetCircuitState 记录熔断器当前状态。
 func SetCircuitState(name, state string) {
 	v, ok := cbStateValue[state]
 	if !ok {
 		v = -1
 	}
-	defaultRegistry.SetGauge(MetricCBState, Labels{"name": name}, v)
+	SetGauge(MetricCBState, Labels{"name": name}, v)
 }
 
-// CountCircuitEvent 记录一次状态迁移
+// CountCircuitEvent 记录一次状态迁移。
 func CountCircuitEvent(name, to string) {
-	defaultRegistry.Count(MetricCBEvents, Labels{"name": name, "to": to}, 1)
+	Count(MetricCBEvents, Labels{"name": name, "to": to}, 1)
 }
 
-// CountCircuitRejected 记录一次"因熔断被快速拒绝"
+// CountCircuitRejected 记录一次"因熔断被快速拒绝"。
 func CountCircuitRejected(name string) {
-	defaultRegistry.Count(MetricCBRejected, Labels{"name": name}, 1)
+	Count(MetricCBRejected, Labels{"name": name}, 1)
 }
+
+// ======================== AI 业务指标 ========================
 
 // AIRequest AI 请求观测数据
 type AIRequest struct {
@@ -291,91 +258,72 @@ type AIRequest struct {
 	Source           string // llm / semantic_cache
 }
 
-// RecordAIRequest 记录一次 AI 请求（token、费用、延迟、状态）
+// RecordAIRequest 记录一次 AI 请求（token、费用、延迟、状态）。
 func RecordAIRequest(req AIRequest) {
-	r := defaultRegistry
-	modelLabel := Labels{"model": req.Model, "model_type": req.ModelType, "status": req.Status, "source": req.Source}
-	r.Count(MetricAIRequests, modelLabel, 1)
+	Count(MetricAIRequests, Labels{
+		"model": req.Model, "model_type": req.ModelType,
+		"status": req.Status, "source": req.Source,
+	}, 1)
 
 	if req.PromptTokens > 0 {
-		r.Count(MetricAITokens, Labels{"model": req.Model, "kind": "prompt"}, float64(req.PromptTokens))
+		Count(MetricAITokens, Labels{"model": req.Model, "kind": "prompt"}, float64(req.PromptTokens))
 	}
 	if req.CompletionTokens > 0 {
-		r.Count(MetricAITokens, Labels{"model": req.Model, "kind": "completion"}, float64(req.CompletionTokens))
+		Count(MetricAITokens, Labels{"model": req.Model, "kind": "completion"}, float64(req.CompletionTokens))
 	}
 	if req.CachedTokens > 0 {
 		// 命中上游前缀缓存的 token 数（省下来的钱在这里体现）
-		r.Count(MetricAITokens, Labels{"model": req.Model, "kind": "cached"}, float64(req.CachedTokens))
+		Count(MetricAITokens, Labels{"model": req.Model, "kind": "cached"}, float64(req.CachedTokens))
 	}
 	if req.CostMicros > 0 {
-		r.Count(MetricAICostMicros, Labels{"model": req.Model}, float64(req.CostMicros))
+		Count(MetricAICostMicros, Labels{"model": req.Model}, float64(req.CostMicros))
 	}
-	r.Observe(MetricAIDuration, Labels{"model": req.Model, "source": req.Source}, req.Latency.Seconds())
+	Observe(MetricAIDuration, Labels{"model": req.Model, "source": req.Source}, req.Latency.Seconds())
 }
 
-// SetGauge 设置瞬时值（包级便捷函数）
-func SetGauge(name string, labels Labels, value float64) {
-	defaultRegistry.SetGauge(name, labels, value)
-}
-
-// EnsureHistogram 预创建直方图序列（不记录观测值）
-// 让 /metrics 在没有流量时也能看到完整分桶，而不是只有 HELP/TYPE 空壳
-func EnsureHistogram(name string, labels Labels) {
-	defaultRegistry.EnsureHistogram(name, labels)
-}
-
-// EnsureHistogram 预创建直方图序列（count/sum 均为 0，语义正确）
-func (r *Registry) EnsureHistogram(name string, labels Labels) {
-	key := seriesKey(name, renderLabels(labels))
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.histograms[key]; ok {
-		return
-	}
-	r.histograms[key] = &histogram{
-		name:    name,
-		labels:  renderLabels(labels),
-		buckets: defaultBuckets,
-		counts:  make([]float64, len(defaultBuckets)),
-	}
-	if _, exists := r.typ[name]; !exists {
-		r.typ[name] = "histogram"
-	}
-}
-
-// Count 计数器累加（包级便捷函数）
-func Count(name string, labels Labels, delta float64) {
-	defaultRegistry.Count(name, labels, delta)
-}
-
-// Observe 观测值（包级便捷函数）
-func Observe(name string, labels Labels, v float64) {
-	defaultRegistry.Observe(name, labels, v)
-}
-
-// RecordCacheLookup 记录语义缓存查询结果
+// RecordCacheLookup 记录语义缓存查询结果。
 func RecordCacheLookup(hit bool) {
 	result := "miss"
 	if hit {
 		result = "hit"
 	}
-	defaultRegistry.Count(MetricAICacheHits, Labels{"result": result}, 1)
+	Count(MetricAICacheHits, Labels{"result": result}, 1)
 }
 
-// RegisterHelp 初始化指标说明（启动时调用一次即可）
+// RegisterHelp 登记 HELP 文案并预置 0 值序列（启动时调用一次即可）。
+//
+// 预置的意义：Prometheus 的 HELP 在 collector 注册时固定，而带标签的序列
+// 要等第一次 With() 才出现。这里先把常用序列创建出来，保证 /metrics
+// 从第一次抓取起就是完整的，抓取配置和目标发现也更容易验证。
 func RegisterHelp() {
-	r := defaultRegistry
-	r.Describe(MetricAIRequests, "AI 请求总数", "counter")
-	r.Describe(MetricAITokens, "AI token 消耗（按 prompt/completion/cached 分类）", "counter")
-	r.Describe(MetricAICostMicros, "AI 费用累计（微元，1 元 = 1e6）", "counter")
-	r.Describe(MetricAIDuration, "AI 请求耗时分布", "histogram")
-	r.Describe(MetricAICacheHits, "语义缓存命中/未命中次数", "counter")
-	r.Describe(MetricActiveSession, "内存中活跃会话数", "gauge")
+	Describe(MetricAIRequests, "AI 请求总数（按模型/类型/状态/来源）")
+	Describe(MetricAITokens, "AI token 消耗（按 prompt/completion/cached 分类）")
+	Describe(MetricAICostMicros, "AI 费用累计（微元，1 元 = 1e6）")
+	Describe(MetricAIDuration, "AI 请求耗时分布（秒）")
+	Describe(MetricAICacheHits, "语义缓存命中/未命中次数")
+	Describe(MetricActiveSession, "内存中活跃会话数")
+	Describe(MetricCBState, "熔断器状态（0=closed 1=half-open 2=open）")
+	Describe(MetricCBEvents, "熔断器状态迁移次数")
+	Describe(MetricCBRejected, "因熔断被快速拒绝的次数")
+	Describe(MetricAgentBudgetExceeded, "Agent 预算耗尽次数（steps/tokens/wallclock）")
+	Describe(MetricAgentToolRetry, "Agent 工具重试次数与结果")
+	Describe(MetricAgentDegraded, "Agent 降级次数（重试/备用模型/纯对话/错误）")
+	Describe(MetricAgentTimeout, "Agent 超时次数（工具/模型/整轮）")
 
-	// 预置 0 值数据点，保证 /metrics 从第一次抓取就能看到全部指标
-	r.SetGauge(MetricActiveSession, nil, 0)
-	r.Count(MetricAIRequests, Labels{"model": "", "model_type": "", "status": "none", "source": "none"}, 0)
-	r.Count(MetricAICacheHits, Labels{"result": "none"}, 0)
-	// 直方图也要预置分桶，否则无流量时只有 HELP/TYPE、看不到 _bucket/_sum/_count
-	r.EnsureHistogram(MetricAIDuration, Labels{"model": "", "source": "none"})
+	// 预置 0 值序列
+	SetGauge(MetricActiveSession, nil, 0)
+	Count(MetricAIRequests, Labels{"model": "", "model_type": "", "status": "none", "source": "none"}, 0)
+	Count(MetricAICacheHits, Labels{"result": "none"}, 0)
+	for _, reason := range []string{"steps", "tokens", "wallclock"} {
+		Count(MetricAgentBudgetExceeded, Labels{"reason": reason}, 0)
+	}
+	Count(MetricAgentToolRetry, Labels{"tool": "none", "result": "none"}, 0)
+	for _, level := range []string{"retry", "fallback_model", "plain_chat", "error"} {
+		Count(MetricAgentDegraded, Labels{"level": level}, 0)
+	}
+	for _, kind := range []string{"tool", "model", "turn"} {
+		Count(MetricAgentTimeout, Labels{"kind": kind}, 0)
+	}
+	// 直方图也要预置分桶，否则无流量时看不到 _bucket/_sum/_count
+	EnsureHistogram(MetricAIDuration, Labels{"model": "", "source": "none"})
 }

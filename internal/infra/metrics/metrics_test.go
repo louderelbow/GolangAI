@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,16 +27,24 @@ func setupConfig(t *testing.T) {
 	t.Setenv("DEEPTALK_CONFIG", example)
 }
 
-func TestRegistryExposition(t *testing.T) {
-	r := NewRegistry()
-	r.Describe("test_counter_total", "测试计数器", "counter")
-	r.Count("test_counter_total", Labels{"model": "m1", "status": "ok"}, 3)
-	r.Count("test_counter_total", Labels{"status": "error", "model": "m1"}, 1)
-	r.Observe("test_duration_seconds", Labels{"model": "m1"}, 0.3)
-	r.SetGauge("test_gauge", nil, 7)
+// TestPrometheusExposition 验证指标确实由官方 promhttp 渲染成标准格式：
+// 直接打一次 /metrics，检查 TYPE 行、带标签的序列、直方图分桶与 gauge。
+func TestPrometheusExposition(t *testing.T) {
+	Describe("test_counter_total", "测试计数器")
+	Count("test_counter_total", Labels{"model": "m1", "status": "ok"}, 3)
+	Count("test_counter_total", Labels{"status": "error", "model": "m1"}, 1)
+	Observe("test_duration_seconds", Labels{"model": "m1"}, 0.3)
+	SetGauge("test_gauge", nil, 7)
 
-	out := r.Snapshot()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	Handler().ServeHTTP(rec, req)
 
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/plain") {
+		t.Errorf("Content-Type 应为 Prometheus 文本格式，实际 %q", ct)
+	}
+
+	out := rec.Body.String()
 	for _, want := range []string{
 		"# TYPE test_counter_total counter",
 		`test_counter_total{model="m1",status="ok"} 3`,
@@ -43,9 +53,38 @@ func TestRegistryExposition(t *testing.T) {
 		`le="+Inf"`,
 		"test_duration_seconds_count",
 		"test_gauge 7",
+		// 用默认 registry 注册，因此运行时指标应一并暴露
+		"go_goroutines",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("exposition 缺少 %q\n---\n%s", want, out)
+		}
+	}
+}
+
+// TestRegisterHelpIdempotent 重复调用不应 panic（启动路径与评测 CLI 都会调用）
+func TestRegisterHelpIdempotent(t *testing.T) {
+	RegisterHelp()
+	RegisterHelp()
+
+	CountAgentBudgetExceeded("steps")
+	CountAgentToolRetry("search_docs", true)
+	CountAgentDegraded("fallback_model")
+	CountAgentTimeout("tool")
+	RecordCacheLookup(true)
+
+	rec := httptest.NewRecorder()
+	Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	out := rec.Body.String()
+
+	for _, want := range []string{
+		MetricAgentBudgetExceeded,
+		MetricAgentToolRetry,
+		MetricAgentDegraded,
+		MetricAgentTimeout,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("/metrics 缺少 %s\n---\n%s", want, out)
 		}
 	}
 }

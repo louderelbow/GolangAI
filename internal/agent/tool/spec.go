@@ -2,8 +2,11 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"deeptalk/internal/infra/metrics"
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -40,10 +43,28 @@ type ToolSpec struct {
 	CacheTTL    time.Duration // 结果缓存时长，0 表示不缓存（PHASE-5）
 }
 
-// EffectiveTimeout 返回实际生效的单次调用超时。
-// 未显式配置时给一个保守默认值，避免某个工具卡住整个 Agent 循环。
-const defaultToolTimeout = 15 * time.Second
+// 单次工具调用的默认超时与最大尝试次数。
+//
+// 之所以做成包级默认而不是每个 ToolSpec 必填：绝大部分工具用同一套策略，
+// 逐个填既啰嗦又容易漏。启动时由 Configure 用 [agent] 配置覆盖一次。
+var (
+	defaultToolTimeout = 15 * time.Second
+	defaultMaxAttempts = 2
+)
 
+// Configure 在启动装配阶段设置工具的统一默认策略。
+// 非正值忽略，避免把零值写进去导致"没有超时"。
+func Configure(timeout time.Duration, maxAttempts int) {
+	if timeout > 0 {
+		defaultToolTimeout = timeout
+	}
+	if maxAttempts > 0 {
+		defaultMaxAttempts = maxAttempts
+	}
+}
+
+// EffectiveTimeout 返回实际生效的单次调用超时。
+// 未显式配置时用统一默认值，避免某个工具卡住整个 Agent 循环。
 func (s ToolSpec) EffectiveTimeout() time.Duration {
 	if s.Timeout > 0 {
 		return s.Timeout
@@ -72,9 +93,36 @@ func (t *specTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 	if t.spec.Handler == nil {
 		return "", fmt.Errorf("tool %s has no handler", t.spec.Name)
 	}
+
 	runCtx, cancel := context.WithTimeout(ctx, t.spec.EffectiveTimeout())
 	defer cancel()
-	return t.spec.Handler(runCtx, argumentsInJSON)
+
+	out, err := runWithRetry(runCtx, t.spec, argumentsInJSON)
+	if err == nil {
+		return out, nil
+	}
+
+	// 超时是"这一步没做成"，不是"整轮失败"：把它当成工具的输出回填给模型，
+	// 让模型自己决定换参数、换工具，还是如实告诉用户暂时拿不到数据。
+	//
+	// 直接返回 error 会让 ReAct 循环整轮中断——一个不稳的工具就能让用户
+	// 拿不到任何回答，代价远大于收益。这也是 AGENT_SPEC 里
+	// "超时作为 observation 回填"的含义。
+	if isToolTimeout(runCtx, ctx) {
+		metrics.CountAgentTimeout("tool")
+		return fmt.Sprintf("工具 %s 调用超时（超过 %s），本次未获得结果。可换一种方式重试，或告知用户暂时无法获取。",
+			t.spec.Name, t.spec.EffectiveTimeout()), nil
+	}
+	return out, err
+}
+
+// isToolTimeout 判断是否为"本次工具调用的超时"，
+// 以便与"调用方整轮超时"区分开：后者不该被当成工具结果回填。
+func isToolTimeout(runCtx, parentCtx context.Context) bool {
+	if parentCtx.Err() != nil {
+		return false
+	}
+	return errors.Is(runCtx.Err(), context.DeadlineExceeded)
 }
 
 // BaseTool 把 ToolSpec 转成 eino 工具，交给 ReAct Agent 使用。

@@ -121,3 +121,19 @@ ipRefill = 0.2
 [debug]
 pprofEnabled = false
 pprofAddr = "127.0.0.1:6060"
+
+# ============ Agent 可靠性 ============
+# 容器环境同样要设上限：上游模型变慢时，没有预算的 Agent 会把连接和额度一起拖满。
+[agent]
+maxSteps = 8
+maxTokens = 20000
+maxWallClockSeconds = 120
+toolTimeoutSeconds = 15
+modelTimeoutSeconds = 60
+toolMaxAttempts = 2
+
+# ============ 模型兜底链 ============
+# 只填模型名；baseUrl / apiKey 复用 ragModelConfig。
+# 容器里留空表示不做模型切换（上游故障时直接返回错误码）。
+[llm]
+fallbackModels = []

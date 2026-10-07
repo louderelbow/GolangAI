@@ -20,8 +20,8 @@ func InitRouter() *gin.Engine {
 	r := gin.Default()
 	r.Use(mw.RequestID())
 
-	// 指标端点（Prometheus 文本格式）：只暴露聚合计数，不含用户数据
-	r.GET("/metrics", gin.WrapF(metrics.Handler()))
+	// 指标端点：由官方 promhttp 渲染（含 go_* / process_* 运行时指标）
+	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	enterRouter := r.Group("/api/v1")
 	{

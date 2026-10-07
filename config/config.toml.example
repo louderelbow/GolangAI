@@ -133,3 +133,24 @@ ipRefill = 0.2                 # 未登录接口按 IP：每 5 秒补 1 个
 [debug]
 pprofEnabled = false
 pprofAddr = "127.0.0.1:6060"   # 只监听本机；要远程看请走 SSH 隧道
+
+# ============ Agent 可靠性 ============
+# Agent 每多走一步就要一次模型调用（成本与延迟线性增长），
+# 下面这些上限保证它"不会跑飞、不会挂死"：
+#   单步超时     → 工具/模型卡住不会拖死整轮
+#   整轮墙钟     → 超时返回已产出的部分内容，而不是 500
+#   步数与 token → 触顶即停止，避免无限循环烧钱
+[agent]
+maxSteps = 8                 # 单轮最大推理步数
+maxTokens = 20000            # 单轮累计 token 上限
+maxWallClockSeconds = 120    # 单轮墙钟上限（秒）
+toolTimeoutSeconds = 15      # 单次工具调用超时（秒）
+modelTimeoutSeconds = 60     # 单次模型调用超时（秒）
+toolMaxAttempts = 2          # 幂等工具最大尝试次数（含首次）
+
+# ============ 模型兜底链 ============
+# 主模型失败 → 原模型重试一次 → 依次尝试备用模型 → 返回错误码。
+# 备用模型与主模型共用 ragModelConfig 的 baseUrl / apiKey，只换模型名；
+# 写错型号名只会被跳过并记日志，不会让 Agent 组装失败。
+[llm]
+fallbackModels = ["qwen-turbo", "deepseek-chat"]

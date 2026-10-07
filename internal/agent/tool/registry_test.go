@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -91,8 +92,11 @@ func TestRegistryRejectsDuplicateName(t *testing.T) {
 	}
 }
 
-// TestToolSpecAppliesTimeout 单个工具卡住不能拖死整个 Agent 循环。
-func TestToolSpecAppliesTimeout(t *testing.T) {
+// TestToolSpecTimeoutBecomesObservation 单个工具卡住不能拖死整个 Agent 循环。
+//
+// 超时必须作为工具输出回填（而不是返回 error）：eino 的 ReAct 在工具报错时
+// 会中断整轮，一个不稳的工具就能让用户拿不到任何回答。
+func TestToolSpecTimeoutBecomesObservation(t *testing.T) {
 	var sawCancel atomic.Bool
 	spec := ToolSpec{
 		Name:    "slow_tool",
@@ -106,14 +110,18 @@ func TestToolSpecAppliesTimeout(t *testing.T) {
 
 	inv := spec.BaseTool().(einotool.InvokableTool)
 	start := time.Now()
-	if _, err := inv.InvokableRun(context.Background(), "{}"); err == nil {
-		t.Fatal("超过 Timeout 应返回错误")
+	out, err := inv.InvokableRun(context.Background(), "{}")
+	if err != nil {
+		t.Fatalf("超时应回填为工具输出而不是返回 error，实际: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("超时未生效，实际耗时 %s", elapsed)
 	}
 	if !sawCancel.Load() {
 		t.Fatal("handler 应观察到 ctx 被取消")
+	}
+	if !strings.Contains(out, "超时") {
+		t.Fatalf("回填内容应说明超时，实际: %q", out)
 	}
 }
 

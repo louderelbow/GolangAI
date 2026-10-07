@@ -57,9 +57,13 @@ func (t *mcpTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts
 	start := time.Now()
 	log.Printf("[MCP] CALL tool=%s args=%s", t.name, truncate(argumentsInJSON, 200))
 
+	// 单次调用超时：一个卡住的工具不能拖死整个 Agent 循环
+	callCtx, cancel := context.WithTimeout(ctx, defaultToolTimeout)
+	defer cancel()
+
 	// 每个工具一个熔断器：某个工具服务挂了不会拖垮其它工具
 	res, err := resilience.Do(resilience.MCPKey(t.name), func() (*mcp.CallToolResult, error) {
-		return t.client.CallTool(ctx, mcp.CallToolRequest{
+		return t.client.CallTool(callCtx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{Name: t.origin, Arguments: args},
 		})
 	})

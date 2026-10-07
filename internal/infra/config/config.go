@@ -110,6 +110,52 @@ type McpConfig struct {
 	MaxStep int               `toml:"maxStep"` // Agent 最大推理步数
 }
 
+// AgentConfig Agent 循环的可靠性与预算约束（[agent] 段）。
+//
+// 这些约束的作用是让 Agent "不会跑飞、不会挂死"：
+// 每一步都受超时保护，整轮受 token / 步数 / 墙钟三重预算限制。
+type AgentConfig struct {
+	MaxSteps            int `toml:"maxSteps"`            // 单轮最大推理步数（默认 8）
+	MaxTokens           int `toml:"maxTokens"`           // 单轮 token 上限（默认 20000）
+	MaxWallClockSeconds int `toml:"maxWallClockSeconds"` // 单轮墙钟上限，秒（默认 120）
+	ToolTimeoutSeconds  int `toml:"toolTimeoutSeconds"`  // 单次工具调用超时，秒（默认 15）
+	ModelTimeoutSeconds int `toml:"modelTimeoutSeconds"` // 单次模型调用超时，秒（默认 60）
+	ToolMaxAttempts     int `toml:"toolMaxAttempts"`     // 幂等工具最大尝试次数（默认 2）
+}
+
+func (c AgentConfig) withDefaults() AgentConfig {
+	if c.MaxSteps <= 0 {
+		c.MaxSteps = 8
+	}
+	if c.MaxTokens <= 0 {
+		c.MaxTokens = 20000
+	}
+	if c.MaxWallClockSeconds <= 0 {
+		c.MaxWallClockSeconds = 120
+	}
+	if c.ToolTimeoutSeconds <= 0 {
+		c.ToolTimeoutSeconds = 15
+	}
+	if c.ModelTimeoutSeconds <= 0 {
+		c.ModelTimeoutSeconds = 60
+	}
+	if c.ToolMaxAttempts <= 0 {
+		c.ToolMaxAttempts = 2
+	}
+	return c
+}
+
+// GetAgent 返回补全默认值后的 Agent 约束。
+func (c *Config) GetAgent() AgentConfig { return c.AgentConfig.withDefaults() }
+
+// LLMConfig 模型层的兜底配置（[llm] 段）。
+//
+// FallbackModels 是主模型不可用时的备用模型名（同一 baseURL / apiKey），
+// 按顺序尝试；全部失败才返回错误码。
+type LLMConfig struct {
+	FallbackModels []string `toml:"fallbackModels"`
+}
+
 // ResilienceConfig 熔断器配置（基于 sony/gobreaker）
 // 默认开启；Disabled=true 时所有调用直连（只保留原有超时/降级逻辑）
 type ResilienceConfig struct {
@@ -161,6 +207,8 @@ type Config struct {
 	IntentConfig     `toml:"intentConfig"`
 	RateLimitConfig  `toml:"rateLimit"`
 	DebugConfig      `toml:"debug"`
+	AgentConfig      `toml:"agent"`
+	LLMConfig        `toml:"llm"`
 }
 
 // TolerantFloat 兼容 TOML 里把浮点字段写成整数的写法。

@@ -7,6 +7,9 @@ import (
 	"io"
 	"strings"
 
+	"deeptalk/internal/agent/guard"
+	"deeptalk/internal/infra/metrics"
+
 	"github.com/cloudwego/eino/components/model"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
@@ -14,11 +17,10 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// defaultMaxStep 是 ReAct 循环的步数上限。
+// defaultMaxStep 是 ReAct 循环的步数兜底上限。
 //
-// Agent 每一步都要一次模型调用（成本与延迟线性增长），而业务上的工具链
-// 通常只有 1~3 步，5 是"够用且不会失控"的上限。真正严格的预算控制在 PHASE-2
-// 由 guard 统一施加，这里只是兜底。
+// 真正的预算控制由 guard.Budget 施加（它按模型调用次数计步，且能卡住 token），
+// 这里只是给 eino 循环一个自身不会失控的上限，避免两者都不设时无限循环。
 const defaultMaxStep = 5
 
 // ReActConfig 构造 ReAct Agent 所需的依赖。
@@ -26,18 +28,24 @@ type ReActConfig struct {
 	Model   model.ToolCallingChatModel
 	Tools   []einotool.BaseTool
 	MaxStep int
+
+	// Limits 单轮资源上限（步数 / token / 墙钟 / 单次模型超时）。
+	// 零值表示该项不限制。
+	Limits guard.Limits
 }
 
 // reactAgent 承载"思考 → 调工具 → 观察 → 再思考"循环。
 //
 // 循环本身复用 eino 的 ReAct 实现；外面这层包壳的价值在于：
 // 1) 给上层一个不依赖具体 Agent 框架的稳定接口；
-// 2) 为 guard / trace 提供可装饰的接入点；
+// 2) 把超时与预算统一施加在模型调用层（guard），循环内部无需感知；
 // 3) 工具为空时自动退化为普通对话，而不是让调用方特判。
 type reactAgent struct {
 	chat    model.ToolCallingChatModel
 	inner   *react.Agent
 	maxStep int
+	budget  *guard.Budget
+	limits  guard.Limits
 }
 
 // NewReActAgent 构造 ReAct Agent。工具为空时退化为普通对话，不算错误。
@@ -51,13 +59,22 @@ func NewReActAgent(ctx context.Context, cfg ReActConfig) (Agent, error) {
 		maxStep = defaultMaxStep
 	}
 
-	a := &reactAgent{chat: cfg.Model, maxStep: maxStep}
+	// 预算与超时施加在模型层：循环内部每一步的 token 消耗只有这里看得见
+	budget := guard.NewBudget(cfg.Limits)
+	chat := guard.WrapModel(cfg.Model, budget)
+
+	a := &reactAgent{
+		chat:    chat,
+		maxStep: maxStep,
+		budget:  budget,
+		limits:  cfg.Limits,
+	}
 	if len(cfg.Tools) == 0 {
 		return a, nil
 	}
 
 	inner, err := react.NewAgent(ctx, &react.AgentConfig{
-		ToolCallingModel: cfg.Model,
+		ToolCallingModel: chat,
 		ToolsConfig:      compose.ToolsNodeConfig{Tools: cfg.Tools},
 		MaxStep:          maxStep,
 	})
@@ -73,17 +90,21 @@ func (a *reactAgent) Run(ctx context.Context, req Request) (*Response, error) {
 	if len(req.Messages) == 0 {
 		return nil, errors.New("react agent: empty messages")
 	}
+
+	turnCtx, cancel := guard.WithTurnTimeout(ctx, a.limits.MaxWallClock)
+	defer cancel()
+
 	if a.inner == nil {
-		msg, err := a.chat.Generate(ctx, req.Messages)
+		msg, err := a.chat.Generate(turnCtx, req.Messages)
 		if err != nil {
-			return nil, fmt.Errorf("plain chat generate: %w", err)
+			return nil, a.turnErr(turnCtx, err)
 		}
 		return &Response{Content: msg.Content, Usage: usageOf(msg)}, nil
 	}
 
-	msg, err := a.inner.Generate(ctx, req.Messages)
+	msg, err := a.inner.Generate(turnCtx, req.Messages)
 	if err != nil {
-		return nil, fmt.Errorf("react agent generate: %w", err)
+		return nil, a.turnErr(turnCtx, err)
 	}
 	return &Response{Content: msg.Content, Usage: usageOf(msg)}, nil
 }
@@ -94,20 +115,44 @@ func (a *reactAgent) Stream(ctx context.Context, req Request, cb StreamCallback)
 		return nil, errors.New("react agent: empty messages")
 	}
 
+	turnCtx, cancel := guard.WithTurnTimeout(ctx, a.limits.MaxWallClock)
+	defer cancel()
+
 	var (
 		stream *schema.StreamReader[*schema.Message]
 		err    error
 	)
 	if a.inner == nil {
-		stream, err = a.chat.Stream(ctx, req.Messages)
+		stream, err = a.chat.Stream(turnCtx, req.Messages)
 	} else {
-		stream, err = a.inner.Stream(ctx, req.Messages)
+		stream, err = a.inner.Stream(turnCtx, req.Messages)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open stream: %w", err)
+		return nil, a.turnErr(turnCtx, err)
 	}
 
-	return drainStream(stream, cb)
+	resp, err := drainStream(stream, cb)
+	if err != nil {
+		return resp, a.turnErr(turnCtx, err)
+	}
+
+	// 流式 token 不经过 budgetModel.Generate，这里用同一份预算结算
+	if a.budget != nil && resp != nil && resp.Usage != nil {
+		if settleErr := a.budget.Settle(resp.Usage); settleErr != nil {
+			return resp, settleErr
+		}
+	}
+	return resp, nil
+}
+
+// turnErr 把"整轮墙钟耗尽"翻译成统一哨兵错误，
+// 上层据此返回已产出的部分内容 + 明确的超时提示，而不是 500。
+func (a *reactAgent) turnErr(ctx context.Context, err error) error {
+	if ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		metrics.CountAgentTimeout("turn")
+		return fmt.Errorf("%w: %v", guard.ErrTurnTimeout, err)
+	}
+	return err
 }
 
 // drainStream 收流并逐块回调。
