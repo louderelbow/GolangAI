@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -214,6 +215,16 @@ const (
 
 	// RAG 指代消解（PHASE-4）
 	MetricRagRewrite = "deeptalk_rag_rewrite_total" // labels: result=rewritten|skipped|fallback_*
+
+	// 多级缓存（PHASE-5）
+	MetricCacheHit                = "deeptalk_cache_hit_total"          // labels: level=exact|semantic|negative
+	MetricCacheMiss               = "deeptalk_cache_miss_total"         // labels: level
+	MetricCacheHitRate            = "deeptalk_cache_hit_rate"           // labels: level
+	MetricCacheSize               = "deeptalk_cache_size"               // labels: level
+	MetricCacheSavedTokens        = "deeptalk_cache_saved_tokens_total" // 命中缓存省下的 token
+	MetricCacheSavedCost          = "deeptalk_cache_saved_cost_total"   // 省下的费用（微元）
+	MetricCachePenetrationBlocked = "deeptalk_cache_penetration_blocked_total"
+	MetricCacheBreakdownLockWait  = "deeptalk_cache_breakdown_lock_wait_ms" // 击穿防护的等待耗时
 )
 
 // CountRagRewrite 记录一次指代消解的结果。
@@ -248,6 +259,91 @@ func CountAgentDegraded(level string) {
 // CountAgentTimeout 记录一次超时。kind 取 tool / model / turn。
 func CountAgentTimeout(kind string) {
 	Count(MetricAgentTimeout, Labels{"kind": kind}, 1)
+}
+
+// ======================== 多级缓存（PHASE-5） ========================
+
+// 缓存层级，与 internal/cache 里的 Level* 常量保持一致
+const (
+	CacheLevelExact    = "exact"
+	CacheLevelSemantic = "semantic"
+	CacheLevelNegative = "negative"
+)
+
+// 命中率是"推导值"，Prometheus 里更好的做法是用
+// rate(hit[5m]) / (rate(hit[5m]) + rate(miss[5m])) 在查询侧算。
+// 这里额外导出一个 gauge，纯粹是为了让 /metrics 一眼能看到，
+// 不必配 PromQL——本地排查时很有用。
+var (
+	cacheStatMu sync.Mutex
+	cacheHits   = map[string]*atomic.Int64{}
+	cacheMisses = map[string]*atomic.Int64{}
+)
+
+func cacheCounter(m map[string]*atomic.Int64, level string) *atomic.Int64 {
+	if c, ok := m[level]; ok {
+		return c
+	}
+	c := &atomic.Int64{}
+	m[level] = c
+	return c
+}
+
+func refreshCacheHitRate(level string) {
+	cacheStatMu.Lock()
+	hits := cacheCounter(cacheHits, level).Load()
+	misses := cacheCounter(cacheMisses, level).Load()
+	cacheStatMu.Unlock()
+
+	total := hits + misses
+	rate := 0.0
+	if total > 0 {
+		rate = float64(hits) / float64(total)
+	}
+	SetGauge(MetricCacheHitRate, Labels{"level": level}, rate)
+}
+
+// CountCacheHit 记录一次命中。
+func CountCacheHit(level string) {
+	Count(MetricCacheHit, Labels{"level": level}, 1)
+	cacheStatMu.Lock()
+	cacheCounter(cacheHits, level).Add(1)
+	cacheStatMu.Unlock()
+	refreshCacheHitRate(level)
+}
+
+// CountCacheMiss 记录一次未命中。
+func CountCacheMiss(level string) {
+	Count(MetricCacheMiss, Labels{"level": level}, 1)
+	cacheStatMu.Lock()
+	cacheCounter(cacheMisses, level).Add(1)
+	cacheStatMu.Unlock()
+	refreshCacheHitRate(level)
+}
+
+// CountCachePenetrationBlocked 记录一次被空结果缓存拦下的请求（穿透防护）。
+func CountCachePenetrationBlocked() {
+	Count(MetricCachePenetrationBlocked, nil, 1)
+}
+
+// AddCacheSaved 累计"因为命中缓存而省下"的 token 与费用。
+func AddCacheSaved(tokens int, costMicros int64) {
+	if tokens > 0 {
+		Count(MetricCacheSavedTokens, nil, float64(tokens))
+	}
+	if costMicros > 0 {
+		Count(MetricCacheSavedCost, nil, float64(costMicros))
+	}
+}
+
+// ObserveCacheLockWait 记录一次"等别人回源"的等待时长（击穿防护的代价）。
+func ObserveCacheLockWait(d time.Duration) {
+	Observe(MetricCacheBreakdownLockWait, nil, float64(d.Milliseconds()))
+}
+
+// SetCacheSize 记录某级缓存当前条数。
+func SetCacheSize(level string, n int) {
+	SetGauge(MetricCacheSize, Labels{"level": level}, float64(n))
 }
 
 // ======================== 熔断器 ========================
@@ -342,6 +438,16 @@ func RegisterHelp() {
 	Describe(MetricAgentTimeout, "Agent 超时次数（工具/模型/整轮）")
 	Describe(MetricRagRewrite, "RAG 指代消解结果（改写/跳过/各降级原因）")
 
+	// 多级缓存（PHASE-5）
+	Describe(MetricCacheHit, "缓存命中次数（按层级）")
+	Describe(MetricCacheMiss, "缓存未命中次数（按层级）")
+	Describe(MetricCacheHitRate, "缓存命中率（按层级，推导值）")
+	Describe(MetricCacheSize, "各级缓存当前条数")
+	Describe(MetricCacheSavedTokens, "命中缓存省下的 token 数")
+	Describe(MetricCacheSavedCost, "命中缓存省下的费用（微元）")
+	Describe(MetricCachePenetrationBlocked, "被空结果缓存拦下的请求数（穿透防护）")
+	Describe(MetricCacheBreakdownLockWait, "等待他人回源的时长（击穿防护的代价）")
+
 	// 预置 0 值序列
 	SetGauge(MetricActiveSession, nil, 0)
 	Count(MetricAIRequests, Labels{"model": "", "model_type": "", "status": "none", "source": "none"}, 0)
@@ -359,6 +465,18 @@ func RegisterHelp() {
 	for _, result := range []string{"rewritten", "skipped", "fallback_empty", "fallback_error", "fallback_timeout"} {
 		Count(MetricRagRewrite, Labels{"result": result}, 0)
 	}
+	for _, level := range []string{CacheLevelExact, CacheLevelSemantic, CacheLevelNegative} {
+		Count(MetricCacheHit, Labels{"level": level}, 0)
+		Count(MetricCacheMiss, Labels{"level": level}, 0)
+		SetGauge(MetricCacheHitRate, Labels{"level": level}, 0)
+		SetGauge(MetricCacheSize, Labels{"level": level}, 0)
+	}
+	Count(MetricCacheSavedTokens, nil, 0)
+	Count(MetricCacheSavedCost, nil, 0)
+	Count(MetricCachePenetrationBlocked, nil, 0)
+	// 命中率与等待时长的分桶都要预置，否则无流量时看不到序列
+	SetHistogramBuckets(MetricCacheBreakdownLockWait, []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 3000})
+	EnsureHistogram(MetricCacheBreakdownLockWait, nil)
 	// 直方图也要预置分桶，否则无流量时看不到 _bucket/_sum/_count
 	EnsureHistogram(MetricAIDuration, Labels{"model": "", "source": "none"})
 }

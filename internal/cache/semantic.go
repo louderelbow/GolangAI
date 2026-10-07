@@ -3,7 +3,6 @@ package cache
 import (
 	"context"
 	"deeptalk/internal/infra/config"
-	"deeptalk/internal/infra/metrics"
 	"deeptalk/internal/infra/resilience"
 	"fmt"
 	"log"
@@ -27,6 +26,10 @@ type semEntry struct {
 	vector   []float64
 	model    string
 	created  time.Time
+
+	// 回源那次实际消耗的 token 与费用，命中时作为"省下来的量"上报
+	tokens     int
+	costMicros int64
 }
 
 type semanticCache struct {
@@ -131,17 +134,17 @@ func Cosine(a, b []float64) float64 {
 	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
-// Lookup 查询语义缓存；命中返回答案
-func (c *semanticCache) Lookup(ctx context.Context, modelKey, question string) (string, bool) {
+// Lookup 查询语义缓存；命中返回答案与"省下的 token/费用"。
+func (c *semanticCache) Lookup(ctx context.Context, modelKey, question string) (string, int, int64, bool) {
 	if !c.Enabled() {
-		return "", false
+		return "", 0, 0, false
 	}
 
 	vec, err := c.embedOne(ctx, question)
 	if err != nil {
 		// embedding 不可用时静默跳过缓存（不影响正常问答）
 		log.Printf("[SemanticCache] embed failed, skip cache: %v", err)
-		return "", false
+		return "", 0, 0, false
 	}
 
 	threshold := c.threshold()
@@ -164,17 +167,14 @@ func (c *semanticCache) Lookup(ctx context.Context, modelKey, question string) (
 	}
 
 	if hit != nil && best >= threshold {
-		metrics.RecordCacheLookup(true)
 		log.Printf("[SemanticCache] HIT sim=%.4f question=%.30s", best, question)
-		return hit.answer, true
+		return hit.answer, hit.tokens, hit.costMicros, true
 	}
-
-	metrics.RecordCacheLookup(false)
-	return "", false
+	return "", 0, 0, false
 }
 
 // Store 写入语义缓存
-func (c *semanticCache) Store(ctx context.Context, modelKey, question, answer string) {
+func (c *semanticCache) Store(ctx context.Context, modelKey, question, answer string, tokens int, costMicros int64) {
 	if !c.Enabled() || answer == "" {
 		return
 	}
@@ -204,11 +204,13 @@ func (c *semanticCache) Store(ctx context.Context, modelKey, question, answer st
 	}
 
 	c.entries = append(c.entries, &semEntry{
-		question: question,
-		answer:   answer,
-		vector:   vec,
-		model:    modelKey,
-		created:  now,
+		question:   question,
+		answer:     answer,
+		vector:     vec,
+		model:      modelKey,
+		created:    now,
+		tokens:     tokens,
+		costMicros: costMicros,
 	})
 }
 
@@ -217,4 +219,15 @@ func (c *semanticCache) Stats() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.entries)
+}
+
+// Purge 清空语义缓存（文档更新后调用）。
+//
+// 语义缓存按向量近邻查，无法精确知道"哪些答案受这篇文档影响"，
+// 因此只能整体失效——文档更新是低频操作，宁可多花几次模型调用，
+// 也不能返回基于旧文档的答案。
+func (c *semanticCache) Purge() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = nil
 }

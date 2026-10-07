@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 )
@@ -156,6 +157,75 @@ type LLMConfig struct {
 	FallbackModels []string `toml:"fallbackModels"`
 }
 
+// CachePenetrationConfig 缓存穿透防护配置
+type CachePenetrationConfig struct {
+	// BloomFilterEnabled 保留字段，本项目未实现布隆过滤器。
+	// 原因见 internal/cache/penetration.go：这里的 key 是用户问题，
+	// 几乎每条都是新的，布隆过滤器会把所有首次提问判成"一定不存在"，
+	// 反而让缓存彻底失效。有界的是文档而不是问题。
+	BloomFilterEnabled    bool `toml:"bloomFilterEnabled"`
+	EmptyResultTTLSeconds int  `toml:"emptyResultTTLSeconds"` // 空结果（拒答）缓存时长，默认 30s
+}
+
+// CacheConfig 多级答案缓存配置（[cache] 段）。
+//
+// 分层是为了**成本**而不是命中率：
+//
+//	L1 精确命中 = 0 次模型调用 + 0 次 embedding 调用
+//	L2 语义命中 = 0 次模型调用 + 1 次 embedding 调用
+//
+// 语义缓存得先把问题向量化，这一步本身就是外部调用；L1 用 hash 绕过了它。
+//
+// 注意 L2 自身的开关/阈值/容量/TTL 仍由已有的 [semanticCache] 段配置——
+// 那一段是历史契约，不在这里重复定义，避免同一个缓存出现两个配置源。
+type CacheConfig struct {
+	// Enabled 用指针区分"没配置"（默认开启）与"显式关闭"。
+	// 用普通 bool 的话，配置文件里漏了 [cache] 段就等于把缓存关掉了——
+	// 这种"静默失效"比配错更难发现。
+	Enabled         *bool                  `toml:"enabled"`
+	ExactTTLSeconds int                    `toml:"exactTTLSeconds"` // L1 有效期，默认 300
+	ExactMaxEntries int                    `toml:"exactMaxEntries"` // L1 容量上限，默认 10000
+	JitterRatio     float64                `toml:"jitterRatio"`     // TTL 抖动比例（防雪崩），默认 0.2
+	Penetration     CachePenetrationConfig `toml:"penetration"`
+}
+
+// IsEnabled 是否启用多级缓存。
+func (c CacheConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+func (c CacheConfig) withDefaults() CacheConfig {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if c.ExactTTLSeconds <= 0 {
+		c.ExactTTLSeconds = 300
+	}
+	if c.ExactMaxEntries <= 0 {
+		c.ExactMaxEntries = 10000
+	}
+	// 抖动不支持关闭：它是防雪崩的安全机制，配成 0 会让一批 key 同时过期。
+	// 因此 <=0 一律按默认值处理。
+	if c.JitterRatio <= 0 {
+		c.JitterRatio = 0.2
+	}
+	if c.JitterRatio > 1 {
+		c.JitterRatio = 1
+	}
+	if c.JitterRatio < 0 || c.JitterRatio > 1 {
+		c.JitterRatio = 0.2
+	}
+	if c.Penetration.EmptyResultTTLSeconds <= 0 {
+		c.Penetration.EmptyResultTTLSeconds = 30
+	}
+	return c
+}
+
+// GetCache 返回补全默认值后的缓存配置。
+func (c *Config) GetCache() CacheConfig { return c.CacheConfig.withDefaults() }
+
+// WithDefaults 导出给测试与外部装配使用，避免零值导致缓存"立即过期 / 容量为 0"。
+func (c CacheConfig) WithDefaults() CacheConfig { return c.withDefaults() }
+
 // RagRewriteConfig 指代消解（Query Rewrite）配置（[ragRewrite] 段）。
 //
 // 意图层能识别"含指代词、依赖上下文"，但检索仍拿原句去查——
@@ -289,6 +359,7 @@ type Config struct {
 	LLMConfig        `toml:"llm"`
 	InferenceConfig  `toml:"inference"`
 	RagRewriteConfig `toml:"ragRewrite"`
+	CacheConfig      `toml:"cache"`
 }
 
 // TolerantFloat 兼容 TOML 里把浮点字段写成整数的写法。
@@ -395,7 +466,10 @@ var DefaultRedisKeyConfig = RedisKeyConfig{
 	IndexNamePrefix:       "rag_docs:%s:",
 }
 
-var config *Config
+var (
+	config     *Config
+	configOnce sync.Once
+)
 
 // ConfigFile 返回实际使用的配置文件路径
 // 优先级：环境变量 DEEPTALK_CONFIG > config/config.toml > config/config.toml.example
@@ -422,10 +496,22 @@ func InitConfig() error {
 	return nil
 }
 
+// GetConfig 返回全局配置（首次调用时加载，线程安全）。
+//
+// 原实现是 `if config == nil { config = new(Config); InitConfig() }` 这种
+// 检查-再赋值：并发下两个 goroutine 会同时进入初始化，其中一个正在
+// DecodeFile 往 config 里写，另一个已经在读它——既可能读到半成品配置，
+// 也会被 race detector 抓到。
+//
+// 每个请求都会走到这里（限流、缓存、模型配置都要读），所以这个竞争
+// 是常态而不是边缘情况。用 sync.Once 与同项目其他单例（MCP 注册表、
+// 推理调度器）保持一致。
 func GetConfig() *Config {
-	if config == nil {
+	configOnce.Do(func() {
 		config = new(Config)
-		_ = InitConfig()
-	}
+		if err := InitConfig(); err != nil {
+			log.Printf("[config] 加载失败，将使用默认值: %v", err)
+		}
+	})
 	return config
 }

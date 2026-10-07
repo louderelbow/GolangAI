@@ -4,11 +4,27 @@ import (
 	"log"
 	"time"
 
+	cachepkg "deeptalk/internal/cache"
 	"deeptalk/internal/infra/metrics"
 	llmpkg "deeptalk/internal/llm"
 
 	"github.com/cloudwego/eino/schema"
 )
+
+// sourceOf 把一次回源的产物连同它的代价打包，供缓存记账。
+//
+// 命中缓存时要上报"省下了多少"，这个量必须来自回源那次的真实用法，
+// 而不是拍一个固定估值——否则 saved_tokens 指标没有依据。
+func sourceOf(modelName, answer string, usage *schema.TokenUsage) cachepkg.Source {
+	src := cachepkg.Source{Answer: answer}
+	if usage == nil {
+		return src
+	}
+	src.Tokens = usage.TotalTokens
+	src.CostMicros = metrics.CostMicros(
+		modelName, usage.PromptTokens, usage.CompletionTokens, usage.PromptTokenDetails.CachedTokens)
+	return src
+}
 
 // messageCount 当前历史条数
 func (a *AIHelper) messageCount() int {

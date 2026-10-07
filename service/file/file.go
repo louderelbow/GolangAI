@@ -2,6 +2,7 @@ package file
 
 import (
 	"context"
+	cachepkg "deeptalk/internal/cache"
 	"deeptalk/internal/rag"
 	"deeptalk/utils"
 	"io"
@@ -99,6 +100,12 @@ func UploadRagFile(username string, file *multipart.FileHeader) (string, error) 
 	// RAGQuery 是按用户名缓存的，这里必须主动失效，否则会一直查旧索引 —— 属于
 	// 静默返回错误答案的那种问题，比报错难查得多。
 	rag.InvalidateUser(username)
+
+	// 答案缓存同样要失效：旧文档的答案已经不对，而且此前"文档里没有答案"
+	// 的拒答判断也不再成立。语义缓存按向量近邻查，无法精确知道哪些答案受
+	// 这篇文档影响，因此整体清空——文档更新是低频操作，宁多花几次模型调用，
+	// 也不能返回基于旧文档的答案。
+	cachepkg.InvalidateAll()
 
 	log.Printf("File indexed successfully: %s", filename)
 	return filePath, nil

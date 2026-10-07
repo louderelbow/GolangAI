@@ -168,3 +168,18 @@ halfOpenProbes = 3
 [ragRewrite]
 enabled = true
 timeoutMs = 800              # 超时即回退原句：改写是锦上添花，不能拖慢主链路
+# ============ 多级答案缓存 ============
+# 分层是为了**成本**，不只是命中率：
+#   L1 精确命中 = 0 次模型调用 + 0 次 embedding 调用
+#   L2 语义命中 = 0 次模型调用 + 1 次 embedding 调用
+# 语义缓存得先把问题向量化才能比相似度，这一步本身就是外部调用；
+# L1 用"模型+问题"的 hash 绕过了它。
+[cache]
+enabled = true
+exactTTLSeconds = 300        # L1 有效期（L2 的 TTL/阈值仍由 [semanticCache] 配置）
+exactMaxEntries = 10000      # L1 容量上限（本地 LRU）
+jitterRatio = 0.2            # TTL 抖动 ±20%：防止一批 key 同时失效（缓存雪崩）
+
+[cache.penetration]
+# 空结果（模型拒答）也缓存，但 TTL 短得多：文档补上后能很快恢复
+emptyResultTTLSeconds = 30

@@ -149,3 +149,12 @@ enabled = false
 [ragRewrite]
 enabled = true
 timeoutMs = 800
+# ============ 多级答案缓存 ============
+[cache]
+enabled = true
+exactTTLSeconds = 300
+exactMaxEntries = 10000
+jitterRatio = 0.2
+
+[cache.penetration]
+emptyResultTTLSeconds = 30
