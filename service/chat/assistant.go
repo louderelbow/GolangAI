@@ -9,6 +9,8 @@ import (
 
 	"deeptalk/internal/agent/askuser"
 	agentmemory "deeptalk/internal/agent/memory"
+	"deeptalk/internal/inference"
+	"deeptalk/internal/infra/metrics"
 	"deeptalk/internal/infra/rabbitmq"
 	llmpkg "deeptalk/internal/llm"
 	"deeptalk/model"
@@ -35,6 +37,13 @@ type AIHelper struct {
 	// 由收尾逻辑写入、由上层在一轮结束后立刻取走：
 	// 留着不清会让下一次普通回答被误判成"又在提问"。
 	clarify *askuser.Request
+
+	// warnings 本轮的用具告警（工具失败 / 被熔断），随响应带给前端做提示。
+	//
+	// 工具失败会被回填成 observation 让本轮继续，所以失败**不会**让请求失败；
+	// 但用户看到的是一段照常输出的回答，无从分辨"没查到"和"查到了但没有"。
+	// 同样由上层在一轮结束后取走。
+	warnings []string
 }
 
 // NewAIHelper 创建新的AIHelper实例
@@ -128,6 +137,25 @@ func (a *AIHelper) TakeClarify() *askuser.Request {
 	return req
 }
 
+// setWarnings 记录本轮的工具告警。
+func (a *AIHelper) setWarnings(msgs []string) {
+	if len(msgs) == 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.warnings = msgs
+}
+
+// TakeWarnings 取出并清空本轮的工具告警（没有则返回 nil）。
+func (a *AIHelper) TakeWarnings() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ws := a.warnings
+	a.warnings = nil
+	return ws
+}
+
 // GetMessages 获取所有消息历史
 func (a *AIHelper) GetMessages() []*model.Message {
 	a.touch()
@@ -157,15 +185,38 @@ func (a *AIHelper) schemaMessages() []*schema.Message {
 var compressTokenLimit = agentmemory.GetMaxTokens
 
 // compressIfNeeded 按 token 预算压缩历史（LLM 调用在锁外执行，不阻塞其他请求）
+//
+// 顺带把"上下文长什么样"报成指标。这是上下文工程的验收口：
+// 历史占比长期过高说明该加强压缩，RAG 占比接近 0 说明检索压根没生效。
 func (a *AIHelper) compressIfNeeded(ctx context.Context) {
-	msgs, _ := a.snapshot()
-	compressor := agentmemory.NewCompressor(compressTokenLimit())
+	msgs, prevSummary := a.snapshot()
+	budget := compressTokenLimit()
+	compressor := agentmemory.NewCompressor(budget)
+
+	// 预算与摘要占用先记：即使不压缩也要能看到它们
+	metrics.SetAgentContextTokens("budget", budget)
+	metrics.SetAgentContextTokens("summary", compressor.CountTokens(prevSummary))
+
 	if !compressor.ShouldCompress(msgs) {
+		metrics.SetAgentContextTokens("history", compressor.EstimateTokens(msgs))
+		metrics.CountAgentCompress("skipped")
 		return
 	}
 
-	recentMsgs, summary, err := compressor.Compress(ctx, msgs, a.model)
+	// 摘要压缩是**锦上添花**：失败就跳过压缩，用户照样拿到回答。
+	//
+	// 所以它必须**让路给主回答** —— 刻意不继承本轮的 High，而是降到 Low。
+	// 池子紧张时先挤掉它，比挤掉用户正在等的那个回答划算得多。
+	//
+	// 注意这里是新建一个 ctx 而不是改原 ctx：原 ctx 还要给后面的主回答用。
+	summarizeCtx := inference.WithPriority(ctx, inference.PriorityLow)
+
+	recentMsgs, summary, err := compressor.Compress(summarizeCtx, msgs, a.model, prevSummary)
 	if err != nil || summary == "" {
+		// 压缩失败会**退回未压缩的历史**，表现为"上下文悄悄变长"，
+		// 而对话本身没有任何异常 —— 所以失败必须单独可见。
+		metrics.CountAgentCompress("failed")
+		metrics.SetAgentContextTokens("history", compressor.EstimateTokens(msgs))
 		return
 	}
 
@@ -173,6 +224,11 @@ func (a *AIHelper) compressIfNeeded(ctx context.Context) {
 	a.messages = recentMsgs
 	a.summary = summary
 	a.mu.Unlock()
+
+	metrics.CountAgentCompress("compressed")
+	metrics.SetAgentContextTokens("history", compressor.EstimateTokens(recentMsgs))
+	// 压完再看一眼摘要：它有没有因为多段追加而吃掉过多预算
+	metrics.SetAgentContextTokens("summary", compressor.CountTokens(summary))
 
 	log.Printf("[AIHelper] memory compressed, session=%s kept=%d history, summary len=%d",
 		a.SessionID, len(recentMsgs), len([]rune(summary)))

@@ -2,8 +2,6 @@ package chat
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,24 +32,23 @@ func (s *stubModel) StreamResponse(_ context.Context, _ []*schema.Message, cb ll
 	cb("ok")
 	return "ok", nil, nil
 }
-func (s *stubModel) GetModelType() string { return llmpkg.ModelTypeDeepSeek }
+func (s *stubModel) GetModelType() string { return llmpkg.ModelTypeRAG }
 func (s *stubModel) GetModelName() string { return "stub-model" }
+
+// summaryStub 专供压缩测试：任何输入都"总结"成一段固定文本。
+//
+// 以前这里会起一个 httptest server 冒充 DeepSeek 上游，走真实的 OpenAI 适配器
+// 转一圈。DeepSeek 直连路径删掉后没必要再绕：被测的是压缩逻辑，不是协议适配，
+// 用桩模型既快又不用管网络。
+type summaryStub struct{ stubModel }
+
+func (s *summaryStub) GenerateResponse(context.Context, []*schema.Message) (*schema.Message, error) {
+	return &schema.Message{Role: schema.Assistant, Content: "摘要内容"}, nil
+}
 
 func newTestModel(t *testing.T) llmpkg.AIModel {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"1","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"摘要内容"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("DEEPSEEK_BASE_URL", server.URL)
-	t.Setenv("DEEPSEEK_API_KEY", "test-key")
-	t.Setenv("DEEPSEEK_MODEL_NAME", "test-model")
-	modelAdapter, err := llmpkg.NewOpenAIModel(context.Background())
-	if err != nil {
-		t.Fatalf("NewOpenAIModel: %v", err)
-	}
-	return modelAdapter
+	return &summaryStub{}
 }
 
 func TestAddMessageConcurrentSafe(t *testing.T) {
@@ -73,6 +70,12 @@ func TestAddMessageConcurrentSafe(t *testing.T) {
 	}
 }
 
+// TestCompressKeepsSummaryAsSystem 压缩后：条数下降、摘要以 system 注入一次。
+//
+// 断言从"必须保留 6 条"改成了"至多 6 条" —— 因为压缩的契约变了：
+// 原实现写死保留 6 条且**不检查结果大小**，用户粘一篇长文档时最近 6 条
+// 本身就超预算，压缩看起来执行了、实际什么都没解决。
+// 现在的契约是"最多 6 条，且必须落进预算"，所以条数是不确定的。
 func TestCompressKeepsSummaryAsSystem(t *testing.T) {
 	oldLimit := compressTokenLimit
 	compressTokenLimit = func() int { return 1000 }
@@ -87,9 +90,21 @@ func TestCompressKeepsSummaryAsSystem(t *testing.T) {
 		t.Fatal("history should exceed token limit")
 	}
 	helper.compressIfNeeded(context.Background())
-	if got := len(helper.GetMessages()); got != 6 {
-		t.Fatalf("compressed history = %d, want 6", got)
+
+	kept := helper.GetMessages()
+	if len(kept) > 6 {
+		t.Fatalf("压缩后不该保留超过 6 条，实际 %d", len(kept))
 	}
+	if len(kept) == 0 {
+		t.Fatal("不该把历史压到什么都不剩")
+	}
+
+	// 真正的契约在这里：压完必须落在预算内。
+	// 1000 条长文本 + 预算 1000 token，如果只按条数留 6 条，仍然是超的。
+	if got := agentmemory.NewCompressor(compressTokenLimit()).EstimateTokens(kept); got > compressTokenLimit() {
+		t.Fatalf("压缩后仍有 %d token，超过预算 %d —— 压缩没有真正起作用", got, compressTokenLimit())
+	}
+
 	var summaries int
 	for _, message := range helper.schemaMessages() {
 		if message.Role == schema.System && strings.Contains(message.Content, "摘要内容") {
@@ -100,6 +115,9 @@ func TestCompressKeepsSummaryAsSystem(t *testing.T) {
 		t.Fatalf("summary system messages = %d, want 1", summaries)
 	}
 }
+
+// 单条超长裁剪、摘要多段合并等纯函数行为，测在 internal/agent/memory 里
+// （那里能直接测未导出函数，不必为测试开导出接口）。
 
 func TestMessagesKeepRole(t *testing.T) {
 	helper := NewAIHelper(&stubModel{}, "session-3")

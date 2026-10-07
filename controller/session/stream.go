@@ -31,11 +31,11 @@ func CreateStreamSessionAndSendMessage(c *gin.Context) {
 		return
 	}
 
-	clarify, resultCode := service.StreamMessageToExistingSession(
+	clarify, warnings, resultCode := service.StreamMessageToExistingSession(
 		c.Request.Context(), c.GetString("userName"), sessionID, req.UserQuestion, req.ModelType, nil,
 		func(chunk string) error { return writeSSEJSON(c, map[string]string{"content": chunk}) },
 	)
-	finishStream(c, clarify, resultCode)
+	finishStream(c, clarify, warnings, resultCode)
 }
 
 func ChatStreamSend(c *gin.Context) {
@@ -46,20 +46,27 @@ func ChatStreamSend(c *gin.Context) {
 	}
 
 	prepareSSE(c)
-	clarify, resultCode := service.StreamMessageToExistingSession(
+	clarify, warnings, resultCode := service.StreamMessageToExistingSession(
 		c.Request.Context(), c.GetString("userName"), req.SessionID, req.UserQuestion, req.ModelType,
 		clarifyContext(req.ClarifyAnswer),
 		func(chunk string) error { return writeSSEJSON(c, map[string]string{"content": chunk}) },
 	)
-	finishStream(c, clarify, resultCode)
+	finishStream(c, clarify, warnings, resultCode)
 }
 
 // finishStream 收尾流式响应。
 //
+// 顺序：工具告警 → 澄清事件 → 结束标记。
 // 澄清事件先于结束标记发出：前端收到 clarify 就知道该弹选择框，
 // 而不是显示一个空回答。它带 type 字段，与普通内容块区分开——
 // 旧前端只会多忽略一个字段，不会因此报错。
-func finishStream(c *gin.Context, clarify *askuser.Request, resultCode code.Code) {
+//
+// warning 事件同理：它不是错误，本轮照常有内容流出，前端只该弹一个轻提示。
+func finishStream(c *gin.Context, clarify *askuser.Request, warnings []string, resultCode code.Code) {
+	for _, w := range warnings {
+		_ = writeSSEJSON(c, map[string]any{"type": "warning", "message": w})
+	}
+
 	if clarify != nil {
 		_ = writeSSEJSON(c, map[string]any{
 			"type":     "clarify",

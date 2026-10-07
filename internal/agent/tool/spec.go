@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"deeptalk/internal/agent/trace"
 	"deeptalk/internal/infra/metrics"
 
 	einotool "github.com/cloudwego/eino/components/tool"
@@ -41,6 +42,14 @@ type ToolSpec struct {
 	Idempotent  bool          // 只有幂等工具才允许自动重试
 	SkillName   string        // 归属的 skill（PHASE-8）
 	CacheTTL    time.Duration // 结果缓存时长，0 表示不缓存（PHASE-5）
+
+	// InterruptOnError 表示这个工具**用错误表达业务语义**：它返回 error
+	// 不是失败，而是要求中断本轮。ask_user 就是靠报错让 Agent 停下来问用户。
+	//
+	// 打开后有三点不同：错误原样上抛、不进熔断器、不回填成 observation。
+	// 少了第三点，一个"信息不足"的正常澄清会被当成工具故障；
+	// 少了第一点，eino 的 ReAct 循环不会停。
+	InterruptOnError bool
 }
 
 // 单次工具调用的默认超时与最大尝试次数。
@@ -94,26 +103,69 @@ func (t *specTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 		return "", fmt.Errorf("tool %s has no handler", t.spec.Name)
 	}
 
+	// 轨迹入口之二。工具的成功率与耗时都从这里算出来——
+	// 而"成功率"必须按下面的分支分别标 ok / timeout / rejected / error，
+	// 否则一个模型反复试探越界路径的会话，在仪表盘上会显示成"工具大面积故障"。
+	sp := trace.Begin(ctx, trace.KindTool, t.spec.Name)
+
+	// 循环检测：同一个工具 + 完全相同的参数已经成功跑过几次了，就别再跑了。
+	//
+	// 放在真正执行**之前**：省下的不只是时间，还有一次可能带副作用的调用
+	// （将来加 write_file / run_command 时，这一点比省时间重要得多）。
+	if g := loopGuardFrom(ctx); g != nil {
+		if n, allFailed, blocked := g.Blocked(t.spec.Name, argumentsInJSON); blocked {
+			sp.End(trace.StatusRejected, "重复调用，已打断")
+			metrics.CountAgentLoopDetected(t.spec.Name)
+			notifyLoop(ctx, t.spec.Name, n, allFailed)
+			return loopObservation(t.spec.Name, argumentsInJSON, n, allFailed), nil
+		}
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, t.spec.EffectiveTimeout())
 	defer cancel()
 
+	// 这里刻意**不**套熔断器。
+	//
+	// 熔断器的用途是"别再去打一个反复失败的远程依赖"。本地工具是进程内代码，
+	// 没有这样的依赖；而 resilience.Do 会读全局配置，一旦引进来，本包与
+	// core 包的单测就必须先准备一份 config.toml 才能跑——纯粹的循环逻辑
+	// 不该背这个负担。
+	//
+	// 真正会失败的是 MCP 工具（外部进程 / HTTP），它们各自有独立熔断器，
+	// 见 mcp_adapter.go。
 	out, err := runWithRetry(runCtx, t.spec, argumentsInJSON)
 	if err == nil {
+		loopGuardFrom(ctx).Succeeded(t.spec.Name, argumentsInJSON)
+		sp.EndOK(out)
 		return out, nil
 	}
 
-	// 超时是"这一步没做成"，不是"整轮失败"：把它当成工具的输出回填给模型，
-	// 让模型自己决定换参数、换工具，还是如实告诉用户暂时拿不到数据。
+	// 下面这些是**真正的失败**，都要计入循环检测。
 	//
-	// 直接返回 error 会让 ReAct 循环整轮中断——一个不稳的工具就能让用户
-	// 拿不到任何回答，代价远大于收益。这也是 AGENT_SPEC 里
-	// "超时作为 observation 回填"的含义。
+	// 两个例外不计：InterruptOnError（那是澄清在用错误表达"中断本轮"，
+	// 不是失败）和整轮已结束（循环已经收尾了，再记账没有意义）。
+	if t.spec.InterruptOnError {
+		sp.EndOK("中断本轮以向用户提问")
+		return out, err
+	}
+
+	if ctx.Err() != nil {
+		sp.EndErr(err, "整轮已结束")
+		return out, err
+	}
+
 	if isToolTimeout(runCtx, ctx) {
 		metrics.CountAgentTimeout("tool")
+		notify(ctx, t.spec.Name, err)
+		sp.End(trace.StatusTimeout, err.Error())
+		loopGuardFrom(ctx).Failed(t.spec.Name, argumentsInJSON)
 		return fmt.Sprintf("工具 %s 调用超时（超过 %s），本次未获得结果。可换一种方式重试，或告知用户暂时无法获取。",
 			t.spec.Name, t.spec.EffectiveTimeout()), nil
 	}
-	return out, err
+
+	sp.EndErr(err, "")
+	loopGuardFrom(ctx).Failed(t.spec.Name, argumentsInJSON)
+	return toolFailureObservation(ctx, t.spec.Name, err), nil
 }
 
 // isToolTimeout 判断是否为"本次工具调用的超时"，

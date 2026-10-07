@@ -8,7 +8,7 @@
 
 | 模块 | 功能 |
 |------|------|
-| 🤖 多模型对话 | 统一调度 **DeepSeek / RAG / Agent** 三类模型 |
+| 🤖 多模型对话 | 统一调度 **RAG / Unified Agent** 两条模型路径 |
 | 📚 RAG 知识库 | 智能 Markdown 分片 → 火山方舟 Embedding → Redis Stack 向量索引 → LLM 关键词增强检索 → Prompt 生成，全链路降级 |
 | 🧠 Agent | 融合原 MCP 与 ReAct 路径，通过原生 function calling 使用外部工具 |
 | 🔌 MCP 协议 | 集成 mcp-go StreamableHTTP/stdio 传输，支持工具白名单与多服务端 |
@@ -52,7 +52,7 @@ DeepTalk/
 ├── dao/                           # 数据访问层
 ├── model/                         # GORM 数据模型
 ├── internal/
-│   ├── llm/                       # 模型契约、DeepSeek、RAG、Unified、工厂
+│   ├── llm/                       # 模型契约、RAG、Unified Agent、工厂
 │   ├── rag/                       # 分片、索引、混合检索、Prompt
 │   ├── decision/                  # 意图规则、LLM 兜底、判定缓存
 │   ├── agent/                     # core/memory/tool/skill/guard
@@ -88,8 +88,8 @@ cp config/config.toml.example config/config.toml
 
 | 用途 | 读取位置 | 说明 |
 |------|----------|------|
-| **DeepSeek**（modelType 1） | 环境变量 `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL_NAME` / `DEEPSEEK_API_KEY`（兼容 `OPENAI_*`） | 默认 `https://api.deepseek.com` + `deepseek-chat` |
-| **阿里百炼**（modelType 2/6 + Embedding） | `[ragModelConfig] apiKey` → `ALIYUN_API_KEY` → `DEEPSEEK_API_KEY` → `OPENAI_API_KEY` | 建议配置 `ragModelConfig.apiKey` |
+| **RAG**（modelType 2 + Embedding） | `[ragModelConfig] apiKey` → `ALIYUN_API_KEY` → `DEEPSEEK_API_KEY` → `OPENAI_API_KEY` | 建议显式配置 `ragModelConfig.apiKey` |
+| **Unified Agent**（modelType 6） | `[agentModel] apiKey` → `[agentModel] apiKeyEnv` 指定的环境变量（默认 `DEEPSEEK_API_KEY`）→ 回落上面那套 | 与 RAG 分开配置：Agent 要可靠的工具调用，RAG 只要便宜够用。整段留空即与 RAG 共用模型 |
 
 
 
@@ -120,6 +120,40 @@ npm install
 npm run serve
 # 前端运行在 http://localhost:8080
 ```
+
+### 或者：一条命令起全套
+
+上面 1~4 步每次都要开四个终端。Windows 上可以直接：
+
+```powershell
+.\scripts\dev.cmd -Check     # 先体检：中间件通不通、端口有没有被占
+.\scripts\dev.cmd            # 起 MCP + 后端 + 前端（各自一个窗口）
+.\scripts\dev.cmd -Stop      # 全停
+```
+
+`dev.cmd` 只是个包装器（优先用 PowerShell 7），也可以直接跑 `.\scripts\dev.ps1`，
+参数完全一样。多一层的原因写在 `dev.cmd` 的注释里：`.ps1` 在
+Windows PowerShell 5.1 下必须带 UTF-8 BOM，否则中文注释会被按 GBK 解码、
+整片变成乱码并把语法搞崩。
+
+它会做三件事：
+
+1. **从 `config/config.toml` 读中间件地址**去探测，而不是猜端口 ——
+   本项目的中间件地址是分散的（Redis 指向 WSL 的 IP，MySQL / RabbitMQ 指向 127.0.0.1）
+2. 检测 **WSL IP 漂移**：`config.toml` 里的地址如果指向一个过期的 WSL 网段，
+   会提示（`-Rebind` 可自动改写）。这个失败是静默的，不查就只能靠"连不上"三个字猜
+3. 在**新窗口**里起 MCP / 后端 / 前端，并等到端口真的可连才算就绪
+
+那三个进程必须跑在 Windows 上（你在这个系统里写代码）；
+中间件则通常跑在 WSL 的 Docker 里 —— 这条跨系统的边界正是脚本存在的理由。
+
+```powershell
+.\scripts\dev.cmd -Middleware   # 顺带在 WSL 里 docker compose up -d 中间件
+.\scripts\dev.cmd -NoFrontend   # 只调接口时省一个窗口
+```
+
+> 观测栈（Prometheus + Grafana）不在这个脚本的范围内：
+> 它是可选的，而且起法完全不同。见 [deploy/observability/README.md](deploy/observability/README.md)。
 
 ## API 接口
 
@@ -154,11 +188,12 @@ npm run serve
 
 | modelType | 模型 | 说明 |
 |-----------|------|------|
-| 1 | DeepSeek | OpenAI 兼容协议，默认聊天 |
 | 2 | 确定性 RAG | 必然检索知识库并基于文档回答 |
 | 6 | Unified Agent | 统一的 Agent + MCP 工具执行路径 |
 
-未记录 `model_type` 的历史会话按 `2` 处理；历史 `3/5` 在执行时映射为 `6`，历史 `4` 映射为 `2`，数据库结构不变。
+未记录 `model_type` 的历史会话按 `2` 处理；历史 `1/3/5` 在执行时映射为 `6`，历史 `4` 映射为 `2`，数据库结构不变。
+
+> `modelType 1`（DeepSeek 纯对话）已于本次删除：它既没有检索也没有工具，与 Agent 的差距只是"要不要主动用工具"，单独留一条执行路径不值当。历史会话仍可打开，会按上面的规则映射到 `6`。
 
 ### 流式协议（SSE）
 
@@ -167,9 +202,15 @@ npm run serve
 ```
 data: {"sessionId": "xxx", "modelType": "2"}   // 新建会话时首个事件
 data: {"content": "增量文本"}
+data: {"type": "warning", "message": "「weather」这次没能取到数据，回答可能不完整"}
+data: {"type": "clarify", "question": "…", "options": [{"id":"a","label":"甲"}]}
 data: {"error": "错误信息"}
 data: [DONE]
 ```
+
+`warning` 不是失败：工具出错时后端会把错误回填成 observation 让本轮继续，
+所以照常有 `content` 流出，`warning` 只是让前端弹一个轻提示。
+`clarify` 表示本轮 Agent 选择反问用户，此时没有正文。
 
 ### MCP 服务（modelType=6 可用）
 
@@ -178,20 +219,118 @@ go run ./internal/infra/mcp -http-addr :8081
 # 后端默认连接 http://localhost:8081/mcp，可用 MCP_BASE_URL 覆盖
 ```
 
+## 本地工作区（让 Agent 查看你自己电脑上的文件）
+
+服务端进程碰不到用户电脑的硬盘，所以执行器是**另一个程序**，跑在用户机器上：
+
+```bash
+# 在 config.toml 里打开 [localAgent] enabled = true
+go run ./cmd/localagent -server http://127.0.0.1:9090 -token <你的JWT> -workspace D:\code\myproj
+```
+
+打开后 Unified Agent（modelType 6）会多出两个工具：`list_files` / `read_file`，
+路径一律相对 `-workspace` 指定的目录。
+
+**分工是刻意的**：能碰硬盘的进程（本地 agent）不持有模型密钥，
+做决策的进程（服务端）碰不到硬盘。服务端只能*请求*，路径是否越界由用户机器上的进程判定——
+`..` 穿越与符号链接逃逸都在那里被拒绝，服务端绕不过去。
+
+| | 说明 |
+|---|---|
+| 连接方向 | 本地 agent **主动**连服务端（WebSocket），用户机器不开任何入站端口 |
+| 认证 | 复用 JWT；token 用 `-token` 或环境变量 `DEEPTALK_TOKEN` 传入 |
+| 越界拒绝 | 走**结果**而不是错误：不会给用户弹"没取到数据"，也不会累计熔断 |
+| 尚未开放 | 写文件与执行命令。它们需要一个用户在本机点"允许"的确认机制 |
+
 ## 成本、可观测与缓存
 
-### /metrics（Prometheus 文本格式，零依赖）
+### 链路追踪：一次记录，两个出口
+
+传统后端的 bug 有栈可看，**模型的问题没有**。用户说"这个回答不对"，从一行日志里
+无法判断是检索没召回、工具选错、还是提示词没约束住。所以每一轮对话都会记一条轨迹：
 
 ```
-deeptalk_ai_requests_total{model,model_type,status,source}   # 请求数（status=ok/error/quota_exceeded，source=llm/semantic_cache）
-deeptalk_ai_tokens_total{model,kind}                         # prompt / completion / cached(命中上游前缀缓存)
-deeptalk_ai_cost_micros_total{model}                         # 费用累计（微元，1 元 = 1e6）
-deeptalk_ai_request_duration_seconds{model,source}           # 延迟直方图
-deeptalk_ai_cache_total{result}                              # 语义缓存 hit/miss
-deeptalk_ai_active_sessions                                  # 内存中活跃会话数
+每个模型调用 / 工具调用 → trace.Recorder 记一条 Step
+                              ↓ 轮结束
+     ┌────────────────────────┴────────────────────────┐
+     ▼                                                 ▼
+Prometheus（步数分布 / 工具成功率 / 澄清触发率…）      MySQL（按 trace_id 回放）
 ```
+
+**指标口径只在 `trace.Flush` 一处**。让每个调用点各自 `Count` 的话，迟早出现
+"某个分支忘了记"——那种洞在仪表盘上只表现为数字偏小，没有任何报错。
+
+收尾放在 `defer` 里而不是散在几个 `return` 前面，因为轨迹最需要的恰恰是**失败的那些轮**。
+实测一次 `exceeds max steps` 的失败轮次，轨迹直接指出了原因：
+
+```
+ 1. turn   turn        error  2581ms
+ 2. model  generate    ok      474ms  请求工具: list_files
+ 3. tool   list_files  ok      2.4ms  工作区根：...
+ 4. model  generate    ok      443ms  请求工具: list_files   ← 又来了
+ 5. tool   list_files  ok      2.4ms  ...
+ …（重复 4 次后撞满 maxStep）
+```
+
+一眼看出：**工具没问题（每次 2ms 都成功），是模型在原地空转。**
+
+查询接口：`GET /api/v1/AI/trace`（最近失败轮次）、`GET /api/v1/AI/trace/:id`（完整步骤）。
+一律按登录用户过滤——轨迹里含会话摘要与工具参数，越权读别人的轨迹等同于越权读别人的聊天记录。
+
+存储选的是**一轮一行 + 轨迹 JSON**：聚合统计归 Prometheus，数据库只负责按 `trace_id` 回放，
+一步一行会让每轮写 6~10 行而查询能力与 Prometheus 重复。
+
+### /metrics（由官方 client_golang + promhttp 渲染）
+
+```
+# 容量视角
+deeptalk_ai_requests_total{model,model_type,status,source}   # status=ok/error/quota_exceeded
+deeptalk_ai_tokens_total{model,kind}                         # prompt / completion / cached
+deeptalk_ai_cost_micros_total{model}                         # 费用累计（微元，1 元 = 1e6）
+deeptalk_ai_request_duration_seconds{model,source}
+deeptalk_ai_active_sessions
+
+# 效果视角：这个 AI 应用**好不好用**，而不只是"有没有在跑"
+deeptalk_agent_turns_total{model,model_type,status}          # 澄清触发率的分母
+deeptalk_agent_turn_duration_seconds{model,model_type}
+deeptalk_agent_steps_per_turn{model}                         # ReAct 步数分布（Agent 效率）
+deeptalk_agent_tool_calls_total{tool,status}                 # status=ok/error/timeout/rejected
+deeptalk_agent_tool_duration_seconds{tool}
+deeptalk_agent_model_calls_total{model,status}
+deeptalk_agent_model_duration_seconds{model}
+deeptalk_agent_clarify_total{outcome}                        # asked / answered / abandoned
+deeptalk_agent_context_tokens{kind}                          # 上下文构成：上下文工程的证据
+deeptalk_agent_trace_spans_total{kind}
+deeptalk_agent_trace_persist_total{result}
+deeptalk_local_agent_online
+deeptalk_local_agent_workspace_total{result}
+
+# 质量趋势
+deeptalk_eval_score{metric}                                  # 黄金集得分
+deeptalk_eval_cases_total{metric,result}
+```
+
+两个刻意的设计：
+
+- **`rejected` 与 `error` 分开**。"按策略正确拒绝"（路径越界、配额拦截、熔断打开）
+  和"出了意外"必须能区分，否则一个模型反复试探越界路径的会话，看起来会像是工具大面积故障。
+- **步数取自模型调用次数**，不是工具调用次数。一个只想要不想做的 Agent 会有很少的工具调用；
+  用工具调用数当步数，那种空转在指标上完全看不出来。
 
 每次请求还会打一条结构化日志：模型、用户、状态、prompt/completion/cached token、费用、延迟。
+
+### 评测
+
+```bash
+go run ./cmd/eval -set eval/golden_example.json -user <账号> -type 2 \
+  -metricsOut eval.prom -json report.json
+```
+
+`-metricsOut` 把得分按 Prometheus 文本格式落盘，交给 Pushgateway 或 textfile collector。
+**分数的趋势才是信息**：一次 0.74 说明不了什么，连着 0.74 → 0.70 → 0.66 说明检索在退化。
+
+报告里每个比率都带样本数（`检索召回率 0.74 （12 条计入）`）。只报比率不报样本数，
+是评测报告最常见的误导来源——而且没有它，就发现不了"分母用错了"这类缺陷。
 
 ### 计费配置（`[aiPricing]`）
 

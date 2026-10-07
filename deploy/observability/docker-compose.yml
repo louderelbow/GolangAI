@@ -1,0 +1,80 @@
+# 只起监控栈，不碰业务容器。
+#
+# 为什么单独一份而不是塞进项目根目录的 docker-compose.yml：
+# 观测是**可选**的。别人 clone 下来只想跑个对话，不该被迫拉起 Prometheus
+# 和 Grafana（两个加起来小 1G 镜像）。需要看盘的人再起这一份。
+#
+# 用法（在项目根目录）：
+#   docker compose -f deploy/observability/docker-compose.yml up -d
+#   docker compose -f deploy/observability/docker-compose.yml down
+#
+# 起来之后：
+#   Prometheus  http://localhost:9091
+#   Grafana     http://localhost:3000    （首次登录 admin / admin）
+
+name: deeptalk-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: deeptalk-prometheus
+    restart: unless-stopped
+    ports:
+      # 注意左边是宿主端口：DeepTalk 后端已经占了 9090，
+      # Prometheus 默认也是 9090，直接映射会撞端口。
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # 抓取目标放在单独的文件里（file_sd），由 refresh-target.sh 维护。
+      # 后端在 Windows、Prometheus 在 WSL 容器里的情况下，Windows 的地址
+      # 每次 WSL 重启都可能变；写死在配置里会静默失效。
+      #
+      # 注意这里是**目录**挂载而不是单文件：单文件挂载时，
+      # 宿主机上 mv 替换文件（脚本就是这么写的，为了原子性）
+      # 会让容器里仍指向被删掉的旧 inode，之后再也读不到更新。
+      # 目录挂载没有这个问题。
+      - ./targets:/etc/prometheus/targets:ro
+      # 数据落在一个命名卷里，容器重建不丢历史（默认保留 15 天）
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      # 允许 POST /-/reload 热加载配置，改完 prometheus.yml 不用重启
+      - "--web.enable-lifecycle"
+    extra_hosts:
+      # 注意这个地址指向的是 **WSL**（Docker 守护进程所在的那台机器），
+      # 不是 Windows。所以后端跑在 Windows 上时**用不到它**，
+      # 目标地址得用 refresh-target.sh 生成的那个。
+      #
+      # 留着是为了两种情况：后端搬进 WSL 之后可以直接用；以及 Linux 上
+      # 这个别名不会自动出现，显式写一条省事（重复配置无害）。
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    container_name: deeptalk-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # 关掉匿名访问：这是一块能看到会话量、费用、工具调用的盘，
+      # 不该谁打开浏览器都能看。
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # 首次启动的默认账号。改密码请登录后在界面里改，
+      # 不要写在这里——这个文件是要进 git 的。
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      # 国内网络下拉插件容易卡住启动，先关掉
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      # provisioning 是 Grafana 的"声明式配置"：
+      # 数据源和仪表盘都从文件读，容器一起来就已经配好了，
+      # 不用手点「Add data source」再手搓面板。
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  prometheus_data:
+  grafana_data:

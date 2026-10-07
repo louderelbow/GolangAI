@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"deeptalk/internal/decision"
+	"deeptalk/internal/inference"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -82,6 +83,13 @@ func (r *Rewriter) Rewrite(ctx context.Context, query string, history []*schema.
 	if r == nil || r.llm == nil || strings.TrimSpace(query) == "" {
 		return base
 	}
+
+	// 指代消解在关键路径上（它不完成检索就不开始），但它**有降级路径**：
+	// 失败/超时/空输出都会回退原句，用户照样能拿到答案。
+	//
+	// 所以标 Normal 而不是 High：池子紧张时，让路给真正"不给就没有答案"的主回答。
+	// 判据始终是同一条 —— 失败的代价越大，优先级越高。
+	ctx = inference.WithPriority(ctx, inference.PriorityNormal)
 
 	callCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()

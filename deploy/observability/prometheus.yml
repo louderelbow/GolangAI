@@ -1,0 +1,31 @@
+global:
+  # 15 秒抓一次。指标本身是低基数的计数器/直方图，不需要更密；
+  # 抓得越密，Prometheus 自己吃掉的磁盘越多（它每个样本都要落盘）。
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # ---------------- DeepTalk 后端 ----------------
+  #
+  # 目标地址**不写在这里**，而是放 /etc/prometheus/targets/ 下的文件里。
+  #
+  # 为什么：后端跑在 Windows 上，Prometheus 跑在 WSL 的容器里，中间隔了两层
+  # 网络命名空间。Windows 在 WSL 眼里的地址（ip route show default 的网关）
+  # **每次 WSL 重启都可能变**。写死在配置里的话，某天它会静默失效——
+  # Prometheus 页面显示 target DOWN，而你会以为是后端挂了。
+  #
+  # file_sd 让 Prometheus 直接把一个文件当目标列表读，文件一变就自动重载：
+  # 不改配置、不重启、不用调 /-/reload。
+  # 刷新目标用同目录下的 refresh-target.sh。
+  - job_name: deeptalk
+    metrics_path: /metrics
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/*.yml"]
+        refresh_interval: 30s
+
+  # ---------------- Prometheus 自己 ----------------
+  # 抓自己不是自恋：它能让你看出"抓取本身有没有出问题"
+  # （scrape_duration_seconds 涨了 = 指标太多或后端变慢）
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

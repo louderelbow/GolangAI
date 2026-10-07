@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"deeptalk/internal/agent/guard"
 	"deeptalk/internal/infra/metrics"
@@ -46,6 +47,16 @@ type reactAgent struct {
 	maxStep int
 	budget  *guard.Budget
 	limits  guard.Limits
+
+	// turnMu 把同一实例上的执行串行化。
+	//
+	// 存在的唯一理由是保护 budget 的**轮级**语义：每轮入口要把预算清零，
+	// 若两轮并发执行，后进的那次会在前一轮跑到一半时把计数抹掉，
+	// 于是资源上限静默失效——限流失效比限流误伤更难发现。
+	//
+	// 上层（service/chat 的 AIHelper）本来就按会话串行，这把锁只是把
+	// 那个隐含约束在类型内部也表达出来，行为上没有变化。
+	turnMu sync.Mutex
 }
 
 // NewReActAgent 构造 ReAct Agent。工具为空时退化为普通对话，不算错误。
@@ -59,7 +70,10 @@ func NewReActAgent(ctx context.Context, cfg ReActConfig) (Agent, error) {
 		maxStep = defaultMaxStep
 	}
 
-	// 预算与超时施加在模型层：循环内部每一步的 token 消耗只有这里看得见
+	// 预算与超时施加在模型层：循环内部每一步的 token 消耗只有这里看得见。
+	//
+	// 注意这份预算的生命周期是**轮**，不是这个 Agent 实例：Agent 随会话复用，
+	// 而预算每轮都要清零，所以在 Run/Stream 的入口调用 Reset（见下）。
 	budget := guard.NewBudget(cfg.Limits)
 	chat := guard.WrapModel(cfg.Model, budget)
 
@@ -76,7 +90,10 @@ func NewReActAgent(ctx context.Context, cfg ReActConfig) (Agent, error) {
 	inner, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: chat,
 		ToolsConfig:      compose.ToolsNodeConfig{Tools: cfg.Tools},
-		MaxStep:          maxStep,
+		// eino 的 MaxStep 是**单次调用**内的循环上限（一次工具往返算一步），
+		// 与 guard.Budget 的 MaxSteps（本轮累计的模型调用次数）是两回事。
+		// 前者防 ReAct 跑飞，后者防单轮烧太多 token；两个都要有。
+		MaxStep: maxStep,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build react agent: %w", err)
@@ -90,6 +107,12 @@ func (a *reactAgent) Run(ctx context.Context, req Request) (*Response, error) {
 	if len(req.Messages) == 0 {
 		return nil, errors.New("react agent: empty messages")
 	}
+
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
+
+	// 预算按轮清零：Agent 随会话复用，不清零就会跨轮累加
+	a.budget.Reset()
 
 	turnCtx, cancel := guard.WithTurnTimeout(ctx, a.limits.MaxWallClock)
 	defer cancel()
@@ -114,6 +137,12 @@ func (a *reactAgent) Stream(ctx context.Context, req Request, cb StreamCallback)
 	if len(req.Messages) == 0 {
 		return nil, errors.New("react agent: empty messages")
 	}
+
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
+
+	// 预算按轮清零（同 Run）：流式一轮可能跨多步，但上限仍是本轮的
+	a.budget.Reset()
 
 	turnCtx, cancel := guard.WithTurnTimeout(ctx, a.limits.MaxWallClock)
 	defer cancel()

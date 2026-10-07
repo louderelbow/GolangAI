@@ -489,4 +489,6 @@ func RegisterHelp() {
 	EnsureHistogram(MetricCacheBreakdownLockWait, nil)
 	// 直方图也要预置分桶，否则无流量时看不到 _bucket/_sum/_count
 	EnsureHistogram(MetricAIDuration, Labels{"model": "", "source": "none"})
+
+	agentMetricsHelp()
 }

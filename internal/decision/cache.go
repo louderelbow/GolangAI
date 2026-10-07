@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -104,16 +103,7 @@ const IntentMetricsName = "deeptalk_intent_total"
 
 func NewIntentLLM(ctx context.Context) (einomodel.ToolCallingChatModel, error) {
 	cfg := config.GetConfig()
-	key := cfg.RagModelConfig.RagApiKey
-	if key == "" {
-		key = os.Getenv("ALIYUN_API_KEY")
-	}
-	if key == "" {
-		key = os.Getenv("DEEPSEEK_API_KEY")
-	}
-	if key == "" {
-		key = os.Getenv("OPENAI_API_KEY")
-	}
+	key := cfg.RagApiKey()
 	return openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		BaseURL: cfg.RagModelConfig.RagBaseUrl,
 		Model:   cfg.RagModelConfig.RagChatModelName,

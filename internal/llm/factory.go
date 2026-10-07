@@ -9,10 +9,14 @@ import (
 )
 
 // 模型类型常量（会话创建时确定，创建后不可更改）
+//
+// 只有两条执行路径：RAG（确定性检索）与 Unified Agent（自主工具调用）。
+// 原 modelType 1（DeepSeek 纯对话）已删除——它既没有检索也没有工具，
+// 与 Agent 的能力差距只是"要不要主动用工具"，单独留一条路径不值当。
+// 历史会话由 NormalizeModelType 映射到 6。
 const (
-	ModelTypeDeepSeek = llmcore.ModelTypeDeepSeek
-	ModelTypeRAG      = llmcore.ModelTypeRAG
-	ModelTypeUnified  = llmcore.ModelTypeUnified
+	ModelTypeRAG     = llmcore.ModelTypeRAG
+	ModelTypeUnified = llmcore.ModelTypeUnified
 
 	// DefaultModelType 历史会话（未记录模型类型）的兜底模型
 	DefaultModelType = llmcore.DefaultModelType
@@ -44,10 +48,6 @@ func GetGlobalFactory() *AIModelFactory {
 
 // 注册模型
 func (f *AIModelFactory) registerCreators() {
-	f.creators["1"] = func(ctx context.Context, config map[string]interface{}) (AIModel, error) {
-		return NewOpenAIModel(ctx)
-	}
-
 	// 阿里百炼 RAG 模型
 	f.creators["2"] = func(ctx context.Context, config map[string]interface{}) (AIModel, error) {
 		username, ok := config["username"].(string)

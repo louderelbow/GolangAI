@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	agenttool "deeptalk/internal/agent/tool"
@@ -17,35 +18,56 @@ const ToolName = "ask_user"
 
 // toolDescription 是提示词工程里最要紧的一段。
 //
-// 这个工具**滥用比不实现更糟**：如果模型动不动就弹选择框，
-// 用户会觉得它什么都不肯自己答。所以描述里把"不要调用"的场景
-// 写得比"要调用"还具体，并且给出正反例。
-const toolDescription = `当用户的问题缺少做出准确回答所必需的关键信息，且这些信息可以归纳为有限的几个明确选项时，向用户提问并让用户选择。
+// 这个工具**滥用比不实现更糟**：每调用一次，用户就得停下来做一次选择，
+// 这是他付出的成本。所以描述里的重心不是"什么时候该问"，而是
+// "什么时候不该问"——默认动作用已有信息直接回答，而不是先问清楚再答。
+//
+// 判断标准收敛成一句话：**按最可能的那个答案回答，会不会让用户做错决定。**
+// 会 → 问；只是答得粗一点 → 不问。
+const toolDescription = `只在一种情况下调用本工具：按最可能的那个答案直接回答，会让用户做出错误的决定。
 
-【同时满足以下三点才调用】
-1. 缺少的信息会显著改变答案——猜错的代价是"答错"而不只是"答得不够细"
-2. 答案能枚举成 2~6 个明确选项
-3. 从对话历史、用户资料、已检索到的内容里都推不出来
+调用本工具意味着用户必须停下来做一次选择，这是他的成本。所以默认动作是"用已有信息直接回答"，
+而不是"先问清楚再答"。
 
-【以下情况不要调用】
-- 信息不全但可以给出通用回答（例如"一般规定是…，具体以你们公司制度为准"）
-- 选项是开放式的、无法枚举（这时应该在回答正文里反问，而不是用本工具）
-- 只是想让用户确认你已知或已能推断的事情
-- 用户表达了"直接说""别问我"这类意思
+【以下情况一律不调用】
+- 能给出通用答案的（例如"一般规定是…，具体以你们公司制度为准"）
+- 只是答得不够细、不够贴合，但不会导致用户做错决定的
+- 能从对话历史、用户资料、已检索到的内容里推断出来的
+- 候选答案列不出 2~6 个互斥的明确选项（这种在回答正文里反问一句即可）
+- 用户说过"直接说""别问我"这类意思
+- 你自己也拿不准该不该问——拿不准就不要问
+
+【三个条件必须同时满足】
+1. 缺的这一点会实质改变答案：按默认值答等于"答错"，而不只是"答得粗"
+2. 候选答案能枚举成 2~6 个互斥的明确选项
+3. 无法从上下文推断，也不能用一次通用回答绕过去
 
 【调用之后】
-本轮立即结束，用户选择后会带着补充信息继续。因此调用前不要输出答案正文，也不要半答半问。
+本轮立即结束，用户选完（或自己填一个）会带着补充信息继续。
+因此调用前不要输出答案正文，也不要半答半问。
 
 【示例】
 用户：帮我请假
-→ 调用。question="你要请哪种假？"，options=[年假, 病假, 事假, 调休]
-  理由：三种假的规则完全不同，随便挑一个回答就是编造
+→ 不调用。请假的一般流程可以直接回答，用户追问细节时再澄清。
 
-用户：公司年假多少天
-→ 不调用。信息足够，直接依据制度回答
+用户：你好
+→ 不调用。
 
 用户：这个怎么弄
-→ 不调用。"这个"指什么无法枚举成选项，应在回答里反问`
+→ 不调用。"这个"指什么列不出选项，在正文里反问一句即可。
+
+用户：公司年假多少天
+→ 不调用。信息足够，直接依据制度回答。
+
+用户：帮我写个 SQL，取每个部门薪水最高的员工
+→ 调用。question="你用的是哪种数据库？"
+  options=[MySQL, PostgreSQL, SQL Server, SQLite]
+  理由：方言不同写法不同，给错了用户直接跑不起来
+
+用户：报销要走什么流程
+→ 调用。question="这笔报销金额大概多少？"
+  options=[500 元以内, 500-5000 元, 5000 元以上]
+  理由：三档的审批人完全不同，答错用户会走错流程`
 
 // Tool 返回 ask_user 的工具描述，供工具注册表装载。
 //
@@ -58,9 +80,13 @@ func Tool() agenttool.ToolSpec {
 		Info:        toolInfo(),
 		Handler:     handler,
 		// 同一轮里问两次只会让用户困惑；Set 也只保留第一次
-		Idempotent:  false,
-		Timeout:     2 * time.Second, // 纯内存操作，慢了说明有问题
-		RetryPolicy: agenttool.RetryPolicy{MaxAttempts: 1},
+		Idempotent: false,
+		// 本工具靠"返回哨兵错误"来中断 ReAct 循环，所以这个错误是**正常语义**，
+		// 不是失败：不能进熔断器（连着澄清几次会把 breaker 打开、之后再也弹不出来），
+		// 也不能被回填成 observation（那样模型会以为工具坏了，转而自己编答案）。
+		InterruptOnError: true,
+		Timeout:          2 * time.Second, // 纯内存操作，慢了说明有问题
+		RetryPolicy:      agenttool.RetryPolicy{MaxAttempts: 1},
 	}
 }
 
@@ -105,9 +131,64 @@ func toolInfo() *schema.ToolInfo {
 }
 
 type toolArgs struct {
-	Question string   `json:"question"`
-	Reason   string   `json:"reason"`
-	Options  []Option `json:"options"`
+	Question string `json:"question"`
+	Reason   string `json:"reason"`
+	// 用 RawMessage 而不是 []Option：模型的参数形态很不稳定，
+	// 直接反序列化成结构体会让**整个参数**解析失败——连 question 都拿不到，
+	// 一次本来能成立的追问就被整条丢掉了。这里把 options 单独降级解析。
+	Options json.RawMessage `json:"options"`
+}
+
+// parseOptions 尽最大努力把模型给的 options 解析成选项列表。
+//
+// 实测过的真实形态（qwen 系列）：
+//
+//	[{"id":"annual","label":"年假"}]   ← 标准
+//	["年假","病假"]                     ← 只给字符串数组，很常见
+//	[{"value":"年假"},{"value":"病假"}] ← 字段名不是 label
+//
+// 都会在这里被收成统一的 Option；Normalize 再补 id、去重、截断。
+func parseOptions(raw json.RawMessage) []Option {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var objs []Option
+	if err := json.Unmarshal(raw, &objs); err == nil {
+		// 全部没有 label，说明字段名不是 label（例如 value/text）：
+		// 这一支解析"成功"了但没拿到东西，交给下面的兜底再试一次
+		for _, o := range objs {
+			if strings.TrimSpace(o.Label) != "" {
+				return objs
+			}
+		}
+	}
+
+	var strs []string
+	if err := json.Unmarshal(raw, &strs); err == nil {
+		out := make([]Option, 0, len(strs))
+		for _, s := range strs {
+			out = append(out, Option{Label: s})
+		}
+		return out
+	}
+
+	// 最后兜底：对象里的键名千奇百怪，取第一个非空字符串当 label
+	var loose []map[string]any
+	if err := json.Unmarshal(raw, &loose); err == nil {
+		out := make([]Option, 0, len(loose))
+		for _, m := range loose {
+			for _, key := range []string{"label", "text", "value", "name", "title"} {
+				if s, ok := m[key].(string); ok && strings.TrimSpace(s) != "" {
+					out = append(out, Option{Label: s})
+					break
+				}
+			}
+		}
+		return out
+	}
+
+	return nil
 }
 
 func handler(ctx context.Context, argsJSON string) (string, error) {
@@ -116,17 +197,24 @@ func handler(ctx context.Context, argsJSON string) (string, error) {
 		// 参数是模型生成的，格式坏掉是它的问题，不该让整轮失败——
 		// 否则用户会拿到一个"模型运行失败"，而他只是想问个问题。
 		// 回填一句可操作的观察，让它自己决定重试还是直接作答。
+		//
+		// 打日志是因为这种失败**对用户完全不可见**：模型往往就此改口，
+		// 把问题和选项写进正文交差，用户看到的是一条普通回复，
+		// 谁也想不到澄清能力其实被一次坏参数吞掉了。
+		log.Printf("[ask_user] 参数不是合法 JSON，本轮放弃澄清 args=%.200s", argsJSON)
 		return "提问未发出：参数格式不正确。" +
 			"请直接回答用户，或重新调用本工具，参数为 {question, reason, options:[{id,label,hint}]}。", nil
 	}
 
-	req := Request{Question: args.Question, Options: args.Options, Reason: args.Reason}
+	req := Request{Question: args.Question, Options: parseOptions(args.Options), Reason: args.Reason}
 	req.Normalize()
 
 	if !req.Valid() {
 		// 参数不合法时不中断整轮：模型把选项写少了是它的问题，
 		// 不该让用户因此什么回答都拿不到。回填一句观察，让它自己决定
 		// 是直接作答还是重新提问。
+		log.Printf("[ask_user] 参数不合法，本轮放弃澄清 question=%.40q options=%d args=%.200s",
+			req.Question, len(req.Options), argsJSON)
 		return "提问未发出：问题为空或有效选项少于 2 个。" +
 			"请直接回答用户，或重新调用本工具并给出 2~6 个明确选项。", nil
 	}

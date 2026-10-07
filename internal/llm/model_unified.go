@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"deeptalk/internal/agent/askuser"
 	agentcore "deeptalk/internal/agent/core"
 	"deeptalk/internal/agent/guard"
+	agentlocal "deeptalk/internal/agent/local"
 	agenttool "deeptalk/internal/agent/tool"
 	"deeptalk/internal/inference"
 	"deeptalk/internal/infra/config"
@@ -30,7 +30,7 @@ func fallbackModels(ctx context.Context, conf *config.Config, baseURL, apiKey, p
 		models []model.ToolCallingChatModel
 		names  []string
 	)
-	for _, name := range conf.LLMConfig.FallbackModels {
+	for _, name := range conf.AgentFallbackModels() {
 		if name == "" || name == primary {
 			continue
 		}
@@ -71,18 +71,15 @@ type UnifiedModel struct {
 func NewUnifiedModel(ctx context.Context, username string) (*UnifiedModel, error) {
 	conf := config.GetConfig()
 
-	key := conf.RagModelConfig.RagApiKey
+	// Agent 的上游与 RAG 分开配置（[agentModel]），留空则回落 [ragModelConfig]。
+	// 分开的理由见 config.AgentModelConfig 的注释：Agent 需要可靠的工具调用，
+	// RAG 只需要便宜的直答，共用一个模型名必然有一边将就。
+	modelName, baseURL, key := conf.AgentModel()
 	if key == "" {
-		key = os.Getenv("ALIYUN_API_KEY")
+		// 不阻断启动：先让 Agent 装上，失败时由兜底链给出可诊断的错误。
+		// 但一定要吼一声——没有 key 的表现是一串 401，很容易被当成上游挂了。
+		log.Printf("[agent] ⚠️ 没有可用的 API Key（[agentModel].apiKey / 环境变量 / [ragModelConfig].apiKey 均为空）")
 	}
-	if key == "" {
-		key = os.Getenv("DEEPSEEK_API_KEY")
-	}
-	if key == "" {
-		key = os.Getenv("OPENAI_API_KEY")
-	}
-	modelName := conf.RagModelConfig.RagChatModelName
-	baseURL := conf.RagModelConfig.RagBaseUrl
 
 	chat, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		BaseURL: baseURL,
@@ -104,6 +101,23 @@ func NewUnifiedModel(ctx context.Context, username string) (*UnifiedModel, error
 	// 注册失败只记日志不阻断启动：一个工具装不上不该让整个 Agent 起不来。
 	if err := registry.Register(askuser.Tool()); err != nil {
 		log.Printf("[agent] ask_user 注册失败，本轮不提供澄清能力: %v", err)
+	}
+
+	// 本地工作区：让模型查看**用户自己电脑**上某个目录里的文件。
+	// 执行器在用户机器上（cmd/localagent），服务端只负责把调用转发过去。
+	// 没连上时工具会回一句"未连接"而不是报错，模型据此如实告知用户。
+	if conf.GetLocalAgent().Enabled {
+		reg := agentlocal.GetRegistry()
+		forward := func(ctx context.Context, toolName, argsJSON string) (string, error) {
+			s, ok := reg.Current(username)
+			if !ok {
+				return "", agentlocal.ErrNotConnected
+			}
+			return s.Invoke(ctx, toolName, argsJSON)
+		}
+		if err := registry.MustRegister(agenttool.LocalWorkspaceTools(forward)...); err != nil {
+			log.Printf("[agent] 本地工作区工具注册失败，本轮不提供文件查看能力: %v", err)
+		}
 	}
 
 	tools := registry.Tools(ctx)

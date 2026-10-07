@@ -1,0 +1,10 @@
+# Prometheus 的 file_sd 目标文件。
+#
+# 由 refresh-target.sh 生成于 2026-10-07 20:39:48，**不要手改**。
+# 想看当前生效的地址，直接读这个文件。
+
+- targets: ["172.24.32.1:9090"]
+  labels:
+    service: deeptalk-backend
+    env: local
+    via: wsl-gateway

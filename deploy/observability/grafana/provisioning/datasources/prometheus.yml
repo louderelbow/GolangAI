@@ -1,0 +1,24 @@
+# Grafana 数据源：声明式配置。
+#
+# 放在 provisioning 目录里的好处是**容器一起来就已经连好 Prometheus 了**。
+# 手点「Add data source」填 URL 这种事，做一次会忘，教别人更是折磨。
+#
+# uid 是写死的：仪表盘 JSON 里引用数据源时用的就是它。
+# 让 Grafana 自动生成 uid 的话，仪表盘换台机器导入就会找不到数据源。
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: deeptalk-prom
+    type: prometheus
+    access: proxy
+    # 容器之间用服务名互访，不走宿主机端口
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # 让 Grafana 的 PromQL 补全能提示指标名与标签
+      httpMethod: POST
+      # 时间范围对齐到抓取间隔，图表边缘不会出现锯齿轮廓
+      timeInterval: 15s

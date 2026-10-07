@@ -22,6 +22,9 @@ type FirstTurnResult struct {
 	ModelType string
 	// Clarify 非 nil 表示第一轮 Agent 就选择了反问用户（新会话同样可能缺信息）
 	Clarify *askuser.Request
+	// Warnings 本轮的工具告警（工具失败 / 被熔断）：本轮照常继续，
+	// 但要让用户知道这次的回答可能不完整。
+	Warnings []string
 }
 
 func CreateSessionAndSendMessage(ctx context.Context, userName, question, requestedModelType string) (FirstTurnResult, code.Code) {
@@ -38,15 +41,19 @@ func CreateSessionAndSendMessage(ctx context.Context, userName, question, reques
 	// 新会话不可能带"上一轮的澄清回答"，所以这里不需要 ClarifyContext
 	response, err := helper.GenerateResponse(ctx, userName, question)
 
+	// 与 ChatSend 同理：两个附加信息都必须取走，且失败/澄清路径也要带上告警
+	clarifyReq := helper.TakeClarify()
+	warnings := helper.TakeWarnings()
+
 	// 澄清请求优先于错误（同 ChatSend）
-	if req := helper.TakeClarify(); req != nil {
-		return FirstTurnResult{SessionID: created.ID, ModelType: modelType, Clarify: req}, code.CodeNeedClarify
+	if clarifyReq != nil {
+		return FirstTurnResult{SessionID: created.ID, ModelType: modelType, Clarify: clarifyReq, Warnings: warnings}, code.CodeNeedClarify
 	}
 	if err != nil {
 		log.Printf("[session] generate first response: %v", err)
 		return FirstTurnResult{}, mapAIError(err)
 	}
-	return FirstTurnResult{SessionID: created.ID, Answer: response.Content, ModelType: modelType}, code.CodeSuccess
+	return FirstTurnResult{SessionID: created.ID, Answer: response.Content, ModelType: modelType, Warnings: warnings}, code.CodeSuccess
 }
 
 func CreateStreamSessionOnly(_ context.Context, userName, question, requestedModelType string) (string, string, code.Code) {

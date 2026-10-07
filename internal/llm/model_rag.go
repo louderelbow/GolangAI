@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"strings"
 
 	"deeptalk/internal/decision"
@@ -29,16 +28,7 @@ type AliRAGModel struct {
 
 func NewAliRAGModel(ctx context.Context, username string) (*AliRAGModel, error) {
 	conf := config.GetConfig()
-	key := conf.RagModelConfig.RagApiKey
-	if key == "" {
-		key = os.Getenv("ALIYUN_API_KEY")
-	}
-	if key == "" {
-		key = os.Getenv("DEEPSEEK_API_KEY")
-	}
-	if key == "" {
-		key = os.Getenv("OPENAI_API_KEY")
-	}
+	key := conf.RagApiKey()
 	modelName := conf.RagModelConfig.RagChatModelName
 	baseURL := conf.RagModelConfig.RagBaseUrl
 

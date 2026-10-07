@@ -101,12 +101,12 @@ $env:DEEPTALK_CONFIG="$PWD\stress\.tmp\config.stress.toml"
 go run .
 ```
 
-如果要压 **modelType 1（DeepSeek 路径）**，模型地址不在 `baseUrl` 里，得用环境变量指到 mock：
+如果要压 **modelType 6（Unified Agent）**，把 Agent 的上游也指到 mock（`[agentModel]` 段独立于 `[ragModelConfig]`）：
 
 ```powershell
 $env:DEEPTALK_CONFIG="$PWD\stress\.tmp\config.stress.toml"
-$env:DEEPSEEK_BASE_URL="http://127.0.0.1:8099/v1"
-$env:DEEPSEEK_MODEL_NAME="mock-chat"
+# config.stress.toml 里把 [agentModel] 的 baseUrl 改成 http://127.0.0.1:8099/v1，
+# 或保持留空让它回落到 [ragModelConfig]（那边已经指向 mock）
 go run .
 ```
 
@@ -131,7 +131,7 @@ go run ./stress/prep -users 50 -modelType 2 -out stress/users.json -verify
 |---|---|
 | `-users 50` | 账号数。**建议 ≥ 你要用的 VU 数**，原因见下文「三条铁律」 |
 | `-sessions 1` | 每个账号建几个会话 |
-| `-modelType 2` | 会话绑定的模型（1 DeepSeek / 2 RAG / 3 MCP / 4 Ollama / 5 ReAct）。会话模型创建后不可改 |
+| `-modelType 2` | 会话绑定的模型（2 RAG / 6 Unified Agent）。会话模型创建后不可改 |
 | `-skipDoc` | 不建知识库，测 RAG 的降级路径（检索失败 → 退化成裸问） |
 | `-doc <路径>` | 用自己的文档代替内置样例手册 |
 | `-clean` | 先删掉同名测试账号及其会话/消息/索引，再重建 |

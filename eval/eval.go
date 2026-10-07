@@ -37,6 +37,17 @@ type Case struct {
 	ExpectIntent string `json:"expectIntent,omitempty"`
 	// ModelType 用例使用的模型类型，留空用命令行默认值
 	ModelType string `json:"modelType"`
+
+	// Difficulty 难度档：easy / medium / hard / adversarial。
+	//
+	// 为什么必须分档：一个"综合 0.74"无法指导优化 —— 它涨了，可能是
+	// 简单档多了两道题。分档之后才看得出"困难档从 0.31 涨到 0.58"这种
+	// 真正的能力提升，也就是"模型是不是变强了"。
+	Difficulty string `json:"difficulty,omitempty"`
+
+	// Tags 能力标签：single-hop / multi-hop / refusal / distractor ...
+	// 一道题可以属于多个标签，用于按**能力维度**而不是难度切片。
+	Tags []string `json:"tags,omitempty"`
 }
 
 // Set 黄金集
@@ -54,6 +65,16 @@ type Metrics struct {
 	RefusalAccuracy float64 `json:"refusalAccuracy"`
 	Faithfulness    float64 `json:"faithfulness"`
 	IntentAccuracy  float64 `json:"intentAccuracy"`
+
+	// 每个指标实际覆盖的用例数。
+	//
+	// 只报比率不报样本数，是评测报告最常见的误导来源：
+	// "召回 0.74" 在 12 条样本上和在 200 条样本上完全是两回事，
+	// 而且没有它就无法发现"分母用错了"这类缺陷。
+	RecallSamples   int `json:"recallSamples"`
+	CoverageSamples int `json:"coverageSamples"`
+	RefusalSamples  int `json:"refusalSamples"`
+	JudgeSamples    int `json:"judgeSamples"`
 }
 
 // CaseResult 单条结果
@@ -71,6 +92,15 @@ type CaseResult struct {
 	Faithfulness float64  `json:"faithfulness"`
 	LatencyMS    int64    `json:"latencyMs"`
 	Error        string   `json:"error,omitempty"`
+
+	// 该用例是否纳入对应指标的统计范围。
+	//
+	// 把"算不算数"跟着结果一起带出来，是为了让**导出指标的人和读报告的人
+	// 用的是同一套分母**。之前召回率的口径就是在两处各写了一遍，
+	// 一处对了另一处没对，于是门禁永远失败却没人发现。
+	ScoredRecall   bool `json:"scoredRecall"`
+	ScoredCoverage bool `json:"scoredCoverage"`
+	ScoredRefusal  bool `json:"scoredRefusal"`
 }
 
 // Report 评测报告
@@ -85,6 +115,30 @@ type Report struct {
 	Results         []CaseResult `json:"results"`
 	Intent          *IntentEval  `json:"intent,omitempty"`
 	ThresholdFailed []string     `json:"thresholdFailed,omitempty"`
+
+	// ==================== 可归因性元数据 ====================
+	//
+	// 没有这些，评测产出的是"一个数字"；有了它们，才是"一条可以归因的曲线"。
+	// 分数从 0.74 变成 0.70 时，你至少知道模型和代码分别是什么版本。
+
+	// Model 本次实际使用的生成模型名。**必须记录**：
+	// 一个不记录被测对象的评测，原理上无法回答"被测对象变强了吗"。
+	Model string `json:"model,omitempty"`
+	// PromptVersion / RetrievalVersion 由调用方标注（例如提示词哈希、检索配置摘要）
+	PromptVersion    string `json:"promptVersion,omitempty"`
+	RetrievalVersion string `json:"retrievalVersion,omitempty"`
+	// StartedAt / DurationMS 便于把结果对齐到时序数据库与发布记录
+	StartedAt  string `json:"startedAt,omitempty"`
+	DurationMS int64  `json:"durationMs"`
+
+	// ==================== 分维度拆解 ====================
+	//
+	// 见 capability.go：按难度档与能力标签拆开，每个指标带
+	// 95% Wilson 置信区间，样本不足时判决为 insufficient 而不是 fail。
+	Dimensions []Dimension `json:"dimensions,omitempty"`
+
+	// Insufficient 样本不足、无法下结论的维度（提示去补样本，而不是拦发布）
+	Insufficient []string `json:"insufficient,omitempty"`
 }
 
 // LoadSet 读取黄金集（JSON，便于人工编写与 diff）
@@ -114,6 +168,11 @@ type Options struct {
 	IntentOnly bool
 	// IntentLLM 用真实模型跑"规则层不确定"的那部分（会产生少量模型调用）
 	IntentLLM bool
+
+	// PromptVersion / RetrievalVersion 由调用方标注的版本号（提示词哈希、
+	// 检索配置摘要等）。写进报告是为了让"分数变了"可以归因到"哪个变量变了"。
+	PromptVersion    string
+	RetrievalVersion string
 }
 
 var refusalPatterns = []string{
@@ -123,7 +182,15 @@ var refusalPatterns = []string{
 
 // Run 执行评测
 func Run(ctx context.Context, set *Set, opts Options) *Report {
+	started := time.Now()
 	report := &Report{SetName: set.Name, ModelType: opts.ModelType, User: opts.User, Total: len(set.Cases)}
+	report.StartedAt = started.Format(time.RFC3339)
+	report.PromptVersion = opts.PromptVersion
+	report.RetrievalVersion = opts.RetrievalVersion
+
+	// 用 defer 收尾，这样连 IntentOnly 的提前返回也带上了耗时 ——
+	// 元数据出现"只有部分路径有"的情况最讨厌，看起来像是丢数据。
+	defer func() { report.DurationMS = time.Since(started).Milliseconds() }()
 
 	// 意图评测：纯本地规则层，零成本（不调模型），所以永远先跑
 	report.Intent = RunIntentEval(set)
@@ -137,9 +204,22 @@ func Run(ctx context.Context, set *Set, opts Options) *Report {
 		return report
 	}
 
-	var recallSum, coverageSum, refusalSum, faithfulSum float64
-	var latencySum int64
-	var latencyCount int64
+	// 各指标的分母**必须各自统计**，不能共用用例总数。
+	//
+	// 这里修的是一个真实存在过的缺陷：原实现里召回率只在声明了
+	// expectSources 的用例上累加分子，分母却是全部用例——于是召回率
+	// 的上限等于"有用例声明 expectSources 的比例"（0.58），
+	// 而阈值写的是 0.7，这个门禁**永远失败**，也就永远没人看它。
+	//
+	// 教训：只报比率而不报样本数，是评测报告最常见的误导来源。
+	// 所以下面每个指标都同时记下自己覆盖了多少条用例。
+	var (
+		recallSum, recallN       float64
+		coverageSum, coverageN   float64
+		refusalSum, refusalN     float64
+		faithfulSum, faithfulN   float64
+		latencySum, latencyCount int64
+	)
 
 	for i := range set.Cases {
 		c := set.Cases[i]
@@ -149,22 +229,34 @@ func Run(ctx context.Context, set *Set, opts Options) *Report {
 		if res.Error != "" {
 			report.Failed++
 		}
-		if set.Cases[i].ExpectSources != nil {
+		if len(c.ExpectSources) > 0 {
+			recallN++
+			res.ScoredRecall = true
 			if res.RetrievalHit {
 				recallSum++
 			}
 		}
 		if res.Expected > 0 {
+			coverageN++
+			res.ScoredCoverage = true
 			coverageSum += float64(res.Covered) / float64(res.Expected)
 		}
-		if res.RefusalOK {
-			refusalSum++
+		// 拒答准确率只该在"应该拒答"的用例上算：把不该拒答的用例也算进来，
+		// 一个从不拒答的模型会自动拿到 (n-拒答用例)/n 的高分，指标失去意义。
+		if c.ExpectRefusal {
+			refusalN++
+			res.ScoredRefusal = true
+			if res.RefusalOK {
+				refusalSum++
+			}
 		}
 		if opts.Judge {
+			faithfulN++
 			faithfulSum += res.Faithfulness
 		}
 		latencySum += res.LatencyMS
 		latencyCount++
+		report.Results[len(report.Results)-1] = res
 
 		if opts.Verbose {
 			fmt.Printf("  [%s] docs=%d 覆盖=%d/%d 拒答OK=%v 延迟=%dms %s\n",
@@ -172,18 +264,31 @@ func Run(ctx context.Context, set *Set, opts Options) *Report {
 		}
 	}
 
-	n := float64(len(set.Cases))
-	report.Metrics.RetrievalRecall = ratio(recallSum, n)
-	report.Metrics.AnswerCoverage = ratio(coverageSum, n)
-	report.Metrics.RefusalAccuracy = ratio(refusalSum, n)
-	if opts.Judge {
-		report.Metrics.Faithfulness = ratio(faithfulSum, n)
-	}
+	report.Metrics.RetrievalRecall = ratio(recallSum, recallN)
+	report.Metrics.AnswerCoverage = ratio(coverageSum, coverageN)
+	report.Metrics.RefusalAccuracy = ratio(refusalSum, refusalN)
+	report.Metrics.Faithfulness = ratio(faithfulSum, faithfulN)
+
+	report.Metrics.RecallSamples = int(recallN)
+	report.Metrics.CoverageSamples = int(coverageN)
+	report.Metrics.RefusalSamples = int(refusalN)
+	report.Metrics.JudgeSamples = int(faithfulN)
+
 	if latencyCount > 0 {
 		report.AvgLatencyMS = latencySum / latencyCount
 	}
 
 	checkThresholds(report, set.Thresholds)
+
+	// 分维度拆解 + 统计显著性。
+	//
+	// 放在最后做，因为它不改动任何已有指标 —— 它只在总分之外多给一个
+	// "哪个维度在变"的视图。总分继续存在（便于和历史上的数字对齐），
+	// 但决策应当看维度。
+	report.Dimensions = BuildDimensions(set.Cases, report.Results, set.Thresholds)
+	report.ThresholdFailed = append(report.ThresholdFailed, CapabilitySummary(report.Dimensions)...)
+	report.Insufficient = InsufficientSummary(report.Dimensions)
+
 	return report
 }
 

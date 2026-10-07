@@ -4,19 +4,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	"deeptalk/internal/agent/trace"
 	"deeptalk/internal/infra/metrics"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
 
-// Budget 在一次 Agent 执行过程中累计并校验资源用量。
+// Budget 在一次 Agent 执行（**一轮对话**）中累计并校验资源用量。
 //
 // 为什么装饰模型而不是装饰 Agent：ReAct 循环每一步的 token 消耗只在模型调用
 // 这一层可见，包在 Agent 外面只能做事后统计，无法真正"卡住"。
+//
+// ⚠️ 生命周期是**轮级**，不是 Agent 级：被预算包装的模型是在构造 Agent 时
+// 固定下来的，而 Agent 随会话复用（service/chat 里每个会话一个）。所以每轮
+// 开始前必须调用 Reset，否则 steps/tokens/deadline 会跨轮累加——
+// 会话累计跑满 MaxSteps 次模型调用之后，之后每一轮都会直接失败。
+// （这个坑真实发生过：maxSteps=8 被当成"整个会话 8 次调用"。）
 type Budget struct {
 	lim Limits
 
@@ -26,13 +34,28 @@ type Budget struct {
 	deadline time.Time
 }
 
-// NewBudget 按上限构造预算；MaxWallClock 从构造时刻开始计时。
+// NewBudget 按上限构造一份**新一轮**的预算。
 func NewBudget(lim Limits) *Budget {
 	b := &Budget{lim: lim}
-	if lim.MaxWallClock > 0 {
-		b.deadline = time.Now().Add(lim.MaxWallClock)
-	}
+	b.Reset()
 	return b
+}
+
+// Reset 开启新一轮：清零步数与 token，并按当前时刻重新武装墙钟。
+//
+// 必须在每轮 Agent 执行的入口调用。Reset 只应在"没有正在进行的轮次"时调用——
+// internal/agent/core 用一把轮级互斥锁保证这一点。
+func (b *Budget) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.steps = 0
+	b.tokens = 0
+	if b.lim.MaxWallClock > 0 {
+		b.deadline = time.Now().Add(b.lim.MaxWallClock)
+	} else {
+		b.deadline = time.Time{}
+	}
 }
 
 // Exceeded 判断错误是否由预算耗尽引起。
@@ -110,7 +133,14 @@ func (m *budgetModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChat
 }
 
 func (m *budgetModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	// 轨迹入口之一。这里是 Agent 每一次"想"的地方，所以 ReAct 步数
+	// 就是这里被经过的次数——指标不用额外统计，从轨迹里数得出来。
+	sp := trace.Begin(ctx, trace.KindModel, "generate")
+
+	// 预算耗尽不是故障，是策略：模型想再试一次，但这一轮已经用完了额度。
+	// 标 rejected 而不是 error，否则预算生效会让模型成功率看起来像在故障。
 	if err := m.b.beforeCall(); err != nil {
+		sp.End(trace.StatusRejected, err.Error())
 		return nil, err
 	}
 
@@ -123,16 +153,22 @@ func (m *budgetModel) Generate(ctx context.Context, input []*schema.Message, opt
 		if callCtx.Err() != nil && ctx.Err() == nil {
 			metrics.CountAgentTimeout("model")
 		}
+		sp.EndErr(err, "")
 		return nil, err
 	}
 	if err := m.b.afterCall(usageOf(msg)); err != nil {
+		sp.End(trace.StatusRejected, err.Error())
 		return nil, err
 	}
+	sp.EndOK(traceDetail(msg))
 	return msg, nil
 }
 
 func (m *budgetModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	sp := trace.Begin(ctx, trace.KindModel, "stream")
+
 	if err := m.b.beforeCall(); err != nil {
+		sp.End(trace.StatusRejected, err.Error())
 		return nil, err
 	}
 
@@ -140,9 +176,34 @@ func (m *budgetModel) Stream(ctx context.Context, input []*schema.Message, opts 
 	// 流的总时长由整轮墙钟上限约束，token 结算由收流层用同一份 Budget 完成。
 	stream, err := m.inner.Stream(ctx, input, opts...)
 	if err != nil {
+		sp.EndErr(err, "")
 		return nil, err
 	}
+	// 流式只记到"建立连接"为止：真正的耗时在收流层，
+	// 把首包时间当成整段生成时间会让指标低得毫无意义。
+	sp.EndOK("已建立流")
 	return stream, nil
+}
+
+// traceDetail 给模型调用补一句可读的注脚。
+//
+// 轨迹是给人看的，所以这里尽量写"这一步发生了什么"：
+// 是要调工具，还是给出了最终答案。事后翻轨迹时，这一句比时间戳有用得多。
+func traceDetail(msg *schema.Message) string {
+	if msg == nil {
+		return ""
+	}
+	if n := len(msg.ToolCalls); n > 0 {
+		names := make([]string, 0, n)
+		for _, tc := range msg.ToolCalls {
+			names = append(names, tc.Function.Name)
+		}
+		return "请求工具: " + strings.Join(names, ", ")
+	}
+	if msg.Content != "" {
+		return "给出回答"
+	}
+	return ""
 }
 
 // Settle 让收流层把流式 usage 结算进预算。

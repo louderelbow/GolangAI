@@ -41,9 +41,33 @@ docDir = "./docs"
 baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 dimension = 1024
 apiKey = "your-dashscope-api-key"
-maxContextTokens = 4000
+maxContextTokens = 700000
 maxDistance = 0.5            # 相关性阈值（余弦距离，越小越严格）；召回低就放宽到 0.7
 fallbackTopN = 3             # 全都没过阈值时至少保留几条分片
+
+# ============ Unified Agent 专用上游 ============
+# RAG 是"检索 + 一次直答"，便宜够用即可；Unified Agent 要在 ReAct 循环里
+# 反复决定调不调工具、参数怎么给，必须支持可靠的 function calling。
+# 共用一个模型名时只能迁就一边，所以分开配。
+#
+# 三段（模型名 / baseUrl / apiKey）各自独立回落：留空就用 [ragModelConfig] 的对应值，
+# 整段删掉也能跑。
+[agentModel]
+chatModelName = ""           # 例：deepseek-chat
+baseUrl = ""                 # 例：https://api.deepseek.com
+apiKey = ""                  # 留空则读 apiKeyEnv 指定的环境变量
+apiKeyEnv = "DEEPSEEK_API_KEY"
+# 备用模型（同一 baseUrl/key）。留空且 baseUrl 与 RAG 不同时，Agent 走"无兜底"：
+# 拿 A 家的地址请求 B 家的模型只会每次都失败，那种假兜底不如没有。
+# fallbackModels = ["deepseek-reasoner"]
+
+
+# ============ 本地工作区（让模型查看用户自己电脑上的文件）============
+# 执行器是另一个程序：cmd/localagent，跑在**用户自己的电脑**上。
+#   go run ./cmd/localagent -server http://127.0.0.1:9090 -token <JWT> -workspace <目录>
+# 服务端只转发调用，不碰硬盘；路径越界由本地那端拒绝。
+[localAgent]
+enabled = false              # 默认关闭：打开等于允许模型读用户硬盘
 
 
 # ============ 模型计费与可观测（元 / 100 万 token）============
@@ -147,6 +171,15 @@ maxWallClockSeconds = 120    # 单轮墙钟上限（秒）
 toolTimeoutSeconds = 15      # 单次工具调用超时（秒）
 modelTimeoutSeconds = 60     # 单次模型调用超时（秒）
 toolMaxAttempts = 2          # 幂等工具最大尝试次数（含首次）
+# 同一个 (工具 + 参数) 成功调用多少次后拦下来。默认 3；负数表示关闭。
+# 模型空转时它会一直用同样的参数重试，撞满 maxSteps 才停 —— 那对用户是个技术错误。
+loopGuardThreshold = 3
+
+# 调试开关（生产留空）：非空则**会话首轮**必定抛出这个澄清提问，
+# 不管模型有没有调用 ask_user；模型自己抛的会被它覆盖。
+# 用来确定性地验收前端弹窗与"选择进入上下文"，不赌模型心情。
+forceClarifyQuestion = ""
+forceClarifyOptions = []
 
 # ============ 模型兜底链 ============
 # 主模型失败 → 原模型重试一次 → 依次尝试备用模型 → 返回错误码。
@@ -159,8 +192,26 @@ fallbackModels = ["qwen-turbo", "deepseek-chat"]
 # 上游并发可控；过载时快速失败，而不是所有请求一起超时。
 [inference]
 enabled = true
-queueTimeoutMs = 3000        # 排队超过此时长直接拒绝
-maxQueueDepth = 200          # 每个模型的队列长度上限，超出直接拒绝
+# 排队超过此时长直接拒绝（毫秒）
+queueTimeoutMs = 3000
+
+# 每个模型的队列长度上限，超出直接拒绝。
+#
+# ⚠️ 不要"调大一点求安心"。队列深度的**有效上限**是被 queueTimeout 卡住的：
+#
+#     有效深度 ≈ maxConcurrent × (queueTimeout / 单次平均耗时)
+#
+#   qwen-turbo: 30 并发 × (3000ms / 2000ms) ≈ 45
+#
+# 排在第 46 位之后的请求，等满 3 秒也轮不到 —— 结局和"一开始就被拒"完全一样，
+# 但多占 3 秒的内存和一个 goroutine。原来写 200，其中 155 个位置是"排队等死"。
+#
+# 队列太深还有个更隐蔽的代价：**拒绝被推迟了**。用户白等 3 秒才被告知"忙"，
+# 而不是立刻被告知。降级要快要干脆。
+#
+# 想接住更多请求，正路是提高 maxConcurrent 或缩短单次耗时
+#（命中缓存根本不占槽位），而不是加深队列。
+maxQueueDepth = 50
 
 # 每个模型一个池子；未在这里列出的模型走默认值（并发 10）
 [inference.pools.qwen-turbo]

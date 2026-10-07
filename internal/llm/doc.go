@@ -1,2 +1,2 @@
-// Package llm 实现 DeepSeek、确定性 RAG 与统一 Agent 模型适配。
+// Package llm 实现确定性 RAG 与统一 Agent 两条模型路径的适配。
 package llm

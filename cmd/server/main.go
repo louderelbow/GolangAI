@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"deeptalk/dao/message"
+	daotrace "deeptalk/dao/trace"
+	"deeptalk/internal/agent/trace"
 	"deeptalk/internal/inference"
 	"deeptalk/internal/infra/config"
 	"deeptalk/internal/infra/diag"
@@ -73,6 +75,10 @@ func main() {
 			return redis.QuotaIncr(user, day, delta)
 		})
 	})
+
+	// 注入轨迹落库：Prometheus 那一半在 trace.Flush 里已经出去了，
+	// 这里补上"按 trace_id 回放单轮"的那一半。
+	trace.SetStore(daotrace.Create)
 
 	rabbitmq.InitRabbitMQ()
 	log.Println("rabbitmq init success  ")
@@ -186,29 +192,26 @@ func logStartupBanner(conf *config.Config) {
 		conf.RagModelConfig.RagChatModelName, safeHost(conf.RagModelConfig.RagBaseUrl),
 		conf.RagModelConfig.RagEmbeddingModel, conf.RagModelConfig.RagDimension)
 
-	// DeepSeek 那一路的地址来自环境变量，压测时也要指向 mock，顺手打出来
-	baseURL, modelName, _ := deepSeekBaseURL()
-	log.Printf("[config] DeepSeek 模型: %s @ %s", modelName, safeHost(baseURL))
+	// Unified Agent 的上游可能和 RAG 不同，且 key 通常来自环境变量——
+	// 这两件事都只在这里能一眼看清，出问题（401 / 调错上游）时全靠这一行。
+	agentModel, agentBase, agentKey := conf.AgentModel()
+	keyState := "未配置"
+	if agentKey != "" {
+		keyState = "已配置"
+	}
+	log.Printf("[config] Unified Agent 模型: %s @ %s（API Key %s）",
+		agentModel, safeHost(agentBase), keyState)
+
+	// 本地工作区默认是关的。运行时最容易被困惑的一点就是"我明明配了，
+	// 怎么工具列表里没有 list_files / read_file"，所以这里明确打出来。
+	if conf.GetLocalAgent().Enabled {
+		log.Printf("[config] 本地工作区: 已启用（等待 deeptalk-agent 连接；未连接时这两个工具会回「未连接」）")
+	} else {
+		log.Printf("[config] 本地工作区: 未启用 —— [localAgent] enabled = false，Agent 不会注册 list_files / read_file")
+	}
 
 	log.Printf("[config] 语义缓存: enabled=%v 意图 LLM 兜底: %v 熔断: disabled=%v",
 		conf.SemanticCache.Enabled, conf.IntentConfig.LLMFallback, conf.GetResilience().Disabled)
-}
-
-// deepSeekBaseURL 复刻 common/aihelper 里 DeepSeek 的地址解析优先级
-// （那里是包内私有函数，这里只需要打印，不引入依赖）
-func deepSeekBaseURL() (baseURL, modelName, apiKey string) {
-	first := func(vals ...string) string {
-		for _, v := range vals {
-			if v != "" {
-				return v
-			}
-		}
-		return ""
-	}
-	baseURL = first(os.Getenv("DEEPSEEK_BASE_URL"), os.Getenv("OPENAI_BASE_URL"), "https://api.deepseek.com")
-	modelName = first(os.Getenv("DEEPSEEK_MODEL_NAME"), os.Getenv("OPENAI_MODEL_NAME"), "deepseek-chat")
-	apiKey = first(os.Getenv("DEEPSEEK_API_KEY"), os.Getenv("OPENAI_API_KEY"))
-	return baseURL, modelName, apiKey
 }
 
 // safeHost 只保留 scheme://host[:port]，避免把 URL 里可能带的凭据打进日志

@@ -23,12 +23,12 @@ func TestMain(m *testing.M) {
 }
 
 func TestIsValidModelType(t *testing.T) {
-	for _, modelType := range []string{ModelTypeDeepSeek, ModelTypeRAG, ModelTypeUnified} {
+	for _, modelType := range []string{ModelTypeRAG, ModelTypeUnified} {
 		if !IsValidModelType(modelType) {
 			t.Errorf("model type %q should be valid", modelType)
 		}
 	}
-	for _, modelType := range []string{"", "0", "3", "4", "5", "abc"} {
+	for _, modelType := range []string{"", "0", "1", "3", "4", "5", "abc"} {
 		if IsValidModelType(modelType) {
 			t.Errorf("model type %q should be invalid", modelType)
 		}
@@ -144,34 +144,26 @@ func TestToolInfoFromMCP(t *testing.T) {
 	}
 }
 
-// ==================== 模型连接配置解析 ====================
+// ==================== 模型类型 ====================
 
-// deepSeekSettings：环境变量优先，缺失时回落 DEEPSEEK_* → OPENAI_* → 默认值
-func TestDeepSeekSettingsFromEnv(t *testing.T) {
-	// 用例 1：DEEPSEEK_* 存在时优先采用
-	t.Setenv("DEEPSEEK_API_KEY", "env-deepseek-key")
-	t.Setenv("DEEPSEEK_MODEL_NAME", "env-model")
-	t.Setenv("DEEPSEEK_BASE_URL", "http://env.example.com")
-	t.Setenv("OPENAI_API_KEY", "env-openai-key")
-
-	baseURL, modelName, key := deepSeekSettings()
-	if key != "env-deepseek-key" || modelName != "env-model" || baseURL != "http://env.example.com" {
-		t.Errorf("DEEPSEEK_* 环境变量未生效: base=%s model=%s key=%s", baseURL, modelName, key)
+// TestNormalizeModelTypeDropsDeepSeek 原 modelType 1（DeepSeek 纯对话）已删除。
+//
+// 历史会话必须仍能打开，所以它要能映射到一条还活着的路径；
+// 映射目标是 6 而不是 2：它原本就不带检索，映射到 RAG 会让一个
+// 从来不查文档的会话突然开始按文档回答，答案性质变了。
+func TestNormalizeModelTypeDropsDeepSeek(t *testing.T) {
+	got, ok := NormalizeModelType("1")
+	if !ok {
+		t.Fatal("历史 modelType 1 的会话必须仍可打开")
+	}
+	if got != ModelTypeUnified {
+		t.Errorf("应映射到 Unified Agent(6)，实际 %s", got)
 	}
 
-	// 用例 2：缺失时回落 OPENAI_* 与默认值
-	os.Unsetenv("DEEPSEEK_API_KEY")
-	os.Unsetenv("DEEPSEEK_MODEL_NAME")
-	os.Unsetenv("DEEPSEEK_BASE_URL")
-
-	baseURL, modelName, key = deepSeekSettings()
-	if key != "env-openai-key" {
-		t.Errorf("应回落 OPENAI_API_KEY，实际 %s", key)
+	if !IsValidModelType(ModelTypeRAG) || !IsValidModelType(ModelTypeUnified) {
+		t.Error("2 / 6 应仍然有效")
 	}
-	if modelName != "deepseek-chat" {
-		t.Errorf("模型名应回落默认 deepseek-chat，实际 %s", modelName)
-	}
-	if baseURL != "https://api.deepseek.com" {
-		t.Errorf("baseURL 应回落默认 api.deepseek.com，实际 %s", baseURL)
+	if IsValidModelType("1") {
+		t.Error("已删除的 modelType 1 不该还能创建新会话")
 	}
 }

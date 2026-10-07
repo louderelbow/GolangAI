@@ -85,7 +85,7 @@ func main() {
 	prefix := flag.String("prefix", "stress", "测试账号前缀")
 	password := flag.String("password", "stress@123", "测试账号密码")
 	sessionsPerUser := flag.Int("sessions", 1, "每个用户建几个会话")
-	modelType := flag.String("modelType", "2", "会话绑定的模型类型（1 DeepSeek / 2 RAG / 3 MCP / 4 Ollama / 5 ReAct）")
+	modelType := flag.String("modelType", "2", "会话绑定的模型类型（2 RAG / 6 Unified Agent）")
 	out := flag.String("out", "stress/users.json", "生成的数据写到哪个文件")
 	baseURL := flag.String("base", "http://127.0.0.1:9090", "被测服务的地址（写入 users.json）")
 	skipDoc := flag.Bool("skipDoc", false, "不建知识库索引（用于测 RAG 降级路径）")

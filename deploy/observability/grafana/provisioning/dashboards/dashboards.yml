@@ -1,0 +1,20 @@
+# 告诉 Grafana 去哪里读仪表盘 JSON。
+#
+# 这里只是"发现规则"，真正的面板定义在 ../dashboards/deeptalk.json。
+# 分开是为了改面板不用碰这个文件：把 JSON 丢进目录，重启 Grafana 就出现了。
+
+apiVersion: 1
+
+providers:
+  - name: deeptalk
+    orgId: 1
+    # 面板在界面上归到哪个文件夹
+    folder: DeepTalk
+    type: file
+    disableDeletion: false
+    # 允许在界面上改面板并保存回文件（改错了删掉文件重启即可复原）
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

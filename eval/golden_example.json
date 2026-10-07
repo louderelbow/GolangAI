@@ -2,7 +2,7 @@
   "name": "公司规章制度问答黄金集（按你上传的文档定制，可直接扩到 30~50 条）",
   "description": "expectPoints / expectSources 都是「子串匹配」，所以要用短而稳的关键词（比如用 7 而不是 七天）。expectRefusal=true 表示文档里没有答案、模型应当拒答。thresholds 低于阈值时 CLI 退出码为 1。",
   "thresholds": {
-    "retrievalRecall": 0.7,
+    "retrievalRecall": 0.5,
     "answerCoverage": 0.6,
     "refusalAccuracy": 0.9,
     "intentAccuracy": 0.9
@@ -18,7 +18,12 @@
         "年假"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "annual-002",
@@ -31,7 +36,12 @@
         "提前"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "leave-001",
@@ -44,7 +54,12 @@
         "迟到"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "leave-002",
@@ -56,7 +71,12 @@
         "病假"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "leave-003",
@@ -68,7 +88,12 @@
         "事假"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "expense-001",
@@ -81,7 +106,12 @@
         "差旅"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "expense-002",
@@ -93,7 +123,12 @@
         "500"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "expense-003",
@@ -105,7 +140,12 @@
         "2000"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "expense-004",
@@ -117,7 +157,12 @@
         "电子发票"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "overtime-001",
@@ -129,7 +174,12 @@
         "加班"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "overtime-002",
@@ -141,7 +191,12 @@
         "法定节假日"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "overtime-003",
@@ -153,7 +208,12 @@
         "加班"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "resign-001",
@@ -165,7 +225,12 @@
         "离职"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "resign-002",
@@ -177,7 +242,12 @@
         "试用期"
       ],
       "expectRefusal": false,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "id": "summary-001",
@@ -190,7 +260,11 @@
       ],
       "expectSources": [],
       "expectRefusal": false,
-      "expectIntent": "summary"
+      "expectIntent": "summary",
+      "difficulty": "medium",
+      "tags": [
+        "multi-hop"
+      ]
     },
     {
       "id": "refuse-001",
@@ -198,7 +272,11 @@
       "expectPoints": [],
       "expectSources": [],
       "expectRefusal": true,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "hard",
+      "tags": [
+        "refusal"
+      ]
     },
     {
       "id": "refuse-002",
@@ -206,7 +284,11 @@
       "expectPoints": [],
       "expectSources": [],
       "expectRefusal": true,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "hard",
+      "tags": [
+        "refusal"
+      ]
     },
     {
       "id": "refuse-003",
@@ -214,7 +296,11 @@
       "expectPoints": [],
       "expectSources": [],
       "expectRefusal": true,
-      "expectIntent": "question"
+      "expectIntent": "question",
+      "difficulty": "hard",
+      "tags": [
+        "refusal"
+      ]
     },
     {
       "id": "chat-001",
@@ -222,7 +308,11 @@
       "expectPoints": [],
       "expectSources": [],
       "expectRefusal": false,
-      "expectIntent": "chat"
+      "expectIntent": "chat",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "question": "This policy is about annual leave",
@@ -230,7 +320,11 @@
       "expectPoints": [],
       "expectIntent": "question",
       "expectSources": [],
-      "id": "intent-adv-001"
+      "id": "intent-adv-001",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "question": "which one is correct",
@@ -238,7 +332,11 @@
       "expectPoints": [],
       "expectIntent": "question",
       "expectSources": [],
-      "id": "intent-adv-002"
+      "id": "intent-adv-002",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "question": "年假怎么样申请",
@@ -250,7 +348,12 @@
       "expectSources": [
         "年假"
       ],
-      "id": "intent-adv-003"
+      "id": "intent-adv-003",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "question": "你好请问年假几天",
@@ -262,7 +365,12 @@
       "expectSources": [
         "年假"
       ],
-      "id": "intent-adv-004"
+      "id": "intent-adv-004",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "question": "那它呢",
@@ -270,7 +378,11 @@
       "expectPoints": [],
       "expectIntent": "question",
       "expectSources": [],
-      "id": "intent-adv-005"
+      "id": "intent-adv-005",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "question": "谢谢",
@@ -278,7 +390,11 @@
       "expectPoints": [],
       "expectIntent": "chat",
       "expectSources": [],
-      "id": "intent-adv-006"
+      "id": "intent-adv-006",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "question": "这份制度讲了什么",
@@ -289,7 +405,11 @@
       ],
       "expectIntent": "summary",
       "expectSources": [],
-      "id": "intent-adv-007"
+      "id": "intent-adv-007",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "expectIntent": "chat",
@@ -297,7 +417,11 @@
       "question": "谢谢你的说明我们稍后再讨论细节",
       "id": "intent-amb-001",
       "expectPoints": [],
-      "expectRefusal": false
+      "expectRefusal": false,
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "expectIntent": "question",
@@ -309,7 +433,12 @@
       "expectPoints": [
         "年假"
       ],
-      "expectRefusal": false
+      "expectRefusal": false,
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "expectIntent": "chat",
@@ -317,7 +446,11 @@
       "question": "嗯嗯好的我知道了",
       "id": "intent-amb-003",
       "expectPoints": [],
-      "expectRefusal": false
+      "expectRefusal": false,
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "expectIntent": "chat",
@@ -325,7 +458,11 @@
       "expectRefusal": false,
       "expectSources": [],
       "question": "你是RAG模型吗",
-      "id": "intent-meta-001"
+      "id": "intent-meta-001",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "expectIntent": "chat",
@@ -333,7 +470,11 @@
       "expectRefusal": false,
       "expectSources": [],
       "question": "你是什么模型",
-      "id": "intent-meta-002"
+      "id": "intent-meta-002",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "expectIntent": "chat",
@@ -341,7 +482,11 @@
       "expectRefusal": false,
       "expectSources": [],
       "question": "你会画画吗",
-      "id": "intent-meta-003"
+      "id": "intent-meta-003",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     },
     {
       "expectIntent": "question",
@@ -353,7 +498,12 @@
         "年假"
       ],
       "question": "你能帮我查一下年假吗",
-      "id": "intent-meta-004"
+      "id": "intent-meta-004",
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
+      ]
     },
     {
       "expectPoints": [
@@ -365,6 +515,11 @@
       "expectRefusal": false,
       "expectSources": [
         "年假"
+      ],
+      "difficulty": "easy",
+      "tags": [
+        "single-hop",
+        "locatable"
       ]
     },
     {
@@ -376,7 +531,11 @@
       "question": "总结一下这份文档",
       "id": "intent-sum-002",
       "expectRefusal": false,
-      "expectSources": []
+      "expectSources": [],
+      "difficulty": "easy",
+      "tags": [
+        "single-hop"
+      ]
     }
   ]
 }

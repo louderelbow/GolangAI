@@ -220,6 +220,69 @@ func TestToolRejectsTooFewOptions(t *testing.T) {
 	}
 }
 
+// TestToolAcceptsStringOptions 模型只给字符串数组时也要能弹窗。
+//
+// 这是真实踩到的形态：qwen 经常把 options 写成 ["年假","病假"]，
+// 而不是 [{"label":"年假"}]。旧实现用 []Option 直接反序列化整个参数，
+// 会因为 options 而连 question 一起丢掉，模型随即改口把问题和选项写进正文——
+// 用户看到的是一条普通回复，完全不知道澄清能力被一次坏参数吞掉了。
+func TestToolAcceptsStringOptions(t *testing.T) {
+	collector := NewCollector()
+	ctx := WithCollector(context.Background(), collector)
+
+	out, err := runTool(t, ctx, map[string]any{
+		"question": "你要请哪种假？",
+		"options":  []string{"年假", "病假", "事假"},
+	})
+
+	if !errors.Is(err, ErrRequested) {
+		t.Fatalf("字符串数组选项应被接受并中断本轮，实际 err=%v out=%q", err, out)
+	}
+	got, ok := collector.Take()
+	if !ok {
+		t.Fatal("澄清请求应已写进收集器")
+	}
+	if len(got.Options) != 3 {
+		t.Fatalf("应有 3 个选项，实际 %+v", got.Options)
+	}
+	if got.Options[0].Label != "年假" || got.Options[0].ID == "" {
+		t.Errorf("选项 label 应保留、id 应补齐，实际 %+v", got.Options[0])
+	}
+}
+
+// TestParseOptionsLooseShapes 各种实测到的参数形态都要能收下来。
+func TestParseOptionsLooseShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"标准对象", `[{"id":"a","label":"年假"},{"id":"b","label":"病假"}]`, []string{"年假", "病假"}},
+		{"字符串数组", `["年假","病假"]`, []string{"年假", "病假"}},
+		{"字段名不是 label", `[{"value":"年假"},{"text":"病假"}]`, []string{"年假", "病假"}},
+		{"空数组", `[]`, nil},
+		{"完全不是数组", `"年假"`, nil},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := parseOptions(json.RawMessage(c.raw))
+			labels := make([]string, 0, len(got))
+			for _, o := range got {
+				labels = append(labels, o.Label)
+			}
+			if len(labels) != len(c.want) {
+				t.Fatalf("得到 %v，期望 %v", labels, c.want)
+			}
+			for i := range c.want {
+				if labels[i] != c.want[i] {
+					t.Fatalf("得到 %v，期望 %v", labels, c.want)
+				}
+			}
+		})
+	}
+}
+
 // TestToolWithoutCollector 非 Agent 路径（没放收集器）时应优雅退化为普通观察。
 func TestToolWithoutCollector(t *testing.T) {
 	out, err := runTool(t, context.Background(), map[string]any{
@@ -259,10 +322,20 @@ func TestToolSpecIsNotRetried(t *testing.T) {
 	if spec.RetryPolicy.MaxAttempts != 1 {
 		t.Errorf("不该自动重试，实际 MaxAttempts=%d", spec.RetryPolicy.MaxAttempts)
 	}
-	// 描述是提示词工程的重点：必须写清"什么时候不要调用"
-	for _, want := range []string{"不要调用", "2~6 个", "本轮立即结束"} {
+	// 描述是提示词工程的重点：必须写清"什么时候不要调用"。
+	// 这里校验的是**约束在不在**，不是具体措辞——改文案时别把约束删掉就行。
+	for _, want := range []string{"不调用", "2~6 个", "本轮立即结束"} {
 		if !strings.Contains(spec.Description, want) {
 			t.Errorf("工具描述缺少 %q —— 缺少这条约束会导致模型滥用提问", want)
 		}
+	}
+	// 判定标准要收敛成一句可执行的话。写成"信息不足时提问"这种模糊表述，
+	// 模型只会挑对它省事的那半句听，最后变成什么都问。
+	if !strings.Contains(spec.Description, "错误的决定") {
+		t.Error("工具描述应给出唯一判定标准：按默认答案回答会不会让用户做错决定")
+	}
+	// 默认动作必须是"直接回答"，否则模型会把提问当成常规路径
+	if !strings.Contains(spec.Description, "默认动作") {
+		t.Error("工具描述应写明默认动作是直接回答，而不是先问清楚再答")
 	}
 }

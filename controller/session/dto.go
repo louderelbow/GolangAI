@@ -21,6 +21,7 @@ type CreateSessionAndSendMessageResponse struct {
 	SessionID     string          `json:"sessionId,omitempty"`
 	ModelType     string          `json:"modelType,omitempty"`
 	Clarify       *ClarifyPayload `json:"clarify,omitempty"`
+	Warnings      []string        `json:"warnings,omitempty"`
 	controller.Response
 }
 
@@ -45,6 +46,12 @@ type ClarifyPayload struct {
 	Reason   string          `json:"reason,omitempty"`
 }
 
+// Warnings 是本轮的工具告警（工具失败 / 被熔断）。
+//
+// 它不是错误：工具失败已被回填成 observation，本轮照常有回答，
+// 前端只该弹一个轻提示（"这次的回答可能不完整"），不要渲染成失败。
+// 与 clarify 一样是**新增可选字段**，旧客户端忽略即可。
+
 // ClarifyAnswer 用户对澄清提问的回答，随下一轮请求回传。
 //
 // 让前端把原问题一起带回来（而不是靠服务端记状态）：
@@ -52,7 +59,12 @@ type ClarifyPayload struct {
 // 多实例部署、页面刷新都不会丢。
 type ClarifyAnswer struct {
 	Question string `json:"question"` // 当时问的是什么
-	Label    string `json:"label"`    // 用户选了哪一项
+	Label    string `json:"label"`    // 用户选的那一项；Custom=true 时是用户自己输入的原文
+	// Custom 表示 Label 是用户自己敲的，而不是点选的某个选项。
+	//
+	// 只影响拼进上下文时的措辞（"选择了" vs "补充说明"），
+	// 服务端不据此改变任何行为。旧客户端不传即为 false，行为不变。
+	Custom bool `json:"custom,omitempty"`
 }
 
 type ChatSendRequest struct {
@@ -65,6 +77,7 @@ type ChatSendRequest struct {
 type ChatSendResponse struct {
 	AiInformation string          `json:"Information,omitempty"`
 	Clarify       *ClarifyPayload `json:"clarify,omitempty"`
+	Warnings      []string        `json:"warnings,omitempty"`
 	controller.Response
 }
 

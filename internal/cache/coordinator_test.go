@@ -239,7 +239,7 @@ func TestCoordinatorMergesConcurrentMiss(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			<-start
-			results[idx], errs[idx] = c.Do(context.Background(), "m1", "同一个问题", gen)
+			results[idx], errs[idx] = c.Do(context.Background(), Key{User: "u1", Model: "m1"}, "同一个问题", gen)
 		}(i)
 	}
 	close(start)
@@ -270,7 +270,7 @@ func TestCoordinatorDoCachesResult(t *testing.T) {
 		return Source{Answer: "答案", Tokens: 7, CostMicros: 9}, nil
 	}
 
-	first, err := c.Do(context.Background(), "m1", "q", gen)
+	first, err := c.Do(context.Background(), Key{User: "u1", Model: "m1"}, "q", gen)
 	if err != nil {
 		t.Fatalf("第一次回源失败: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestCoordinatorDoCachesResult(t *testing.T) {
 		t.Fatalf("第一次应是回源，实际 level=%s", first.Level)
 	}
 
-	second, err := c.Do(context.Background(), "m1", "q", gen)
+	second, err := c.Do(context.Background(), Key{User: "u1", Model: "m1"}, "q", gen)
 	if err != nil {
 		t.Fatalf("第二次失败: %v", err)
 	}
@@ -301,14 +301,14 @@ func TestCoordinatorDoSkipsCacheForRefusal(t *testing.T) {
 	c := &Coordinator{exact: newExactCache(100), neg: newNegativeCache(time.Minute)}
 
 	gen := func() (Source, error) { return Source{Answer: "无法找到相关信息"}, nil }
-	if _, err := c.Do(context.Background(), "m1", "q", gen); err != nil {
+	if _, err := c.Do(context.Background(), Key{User: "u1", Model: "m1"}, "q", gen); err != nil {
 		t.Fatalf("回源失败: %v", err)
 	}
 
-	if _, _, _, ok := c.exact.Get("m1", "q"); ok {
+	if _, _, _, ok := c.exact.Get("u1|m1", "q"); ok {
 		t.Fatal("拒答不该写进 L1 精确缓存")
 	}
-	if _, ok := c.neg.Get("m1", "q"); !ok {
+	if _, ok := c.neg.Get("u1|m1", "q"); !ok {
 		t.Fatal("拒答应写进空结果冷却期")
 	}
 }
@@ -319,9 +319,89 @@ func TestCoordinatorDoPropagatesError(t *testing.T) {
 	c := &Coordinator{exact: newExactCache(100), neg: newNegativeCache(time.Minute)}
 	want := errors.New("upstream boom")
 
-	_, err := c.Do(context.Background(), "m1", "q", func() (Source, error) { return Source{}, want })
+	_, err := c.Do(context.Background(), Key{User: "u1", Model: "m1"}, "q", func() (Source, error) { return Source{}, want })
 	if !errors.Is(err, want) {
 		t.Fatalf("应把回源错误透传出去，实际 %v", err)
+	}
+}
+
+// TestCoordinatorDoesNotLeakAcrossUsers 缓存绝不能跨用户命中。
+//
+// 这是**隔离边界**，不是命中率优化：RAG 的答案取决于该用户自己的文档，
+// 缓存键里不带用户时，A 问出来的答案会被 B 的同一句话命中。
+// 修复前正是如此（键只有 modelType|modelName）。
+func TestCoordinatorDoesNotLeakAcrossUsers(t *testing.T) {
+	setupConfig(t)
+
+	c := &Coordinator{exact: newExactCache(100), neg: newNegativeCache(time.Minute)}
+	keyOf := func(user string) Key { return Key{User: user, Model: "2|qwen"} }
+
+	var calls int32
+	alice := func() (Source, error) {
+		atomic.AddInt32(&calls, 1)
+		return Source{Answer: "A 的文档里写着 10 天"}, nil
+	}
+
+	first, err := c.Do(context.Background(), keyOf("alice"), "我的年假几天", alice)
+	if err != nil {
+		t.Fatalf("A 回源失败: %v", err)
+	}
+	if first.Level != LevelMiss {
+		t.Fatalf("A 首次应回源，实际 level=%s", first.Level)
+	}
+
+	if again, _ := c.Do(context.Background(), keyOf("alice"), "我的年假几天", alice); again.Level != LevelExact {
+		t.Fatalf("同一用户重复提问应命中 L1，实际 level=%s", again.Level)
+	}
+
+	bob, err := c.Do(context.Background(), keyOf("bob"), "我的年假几天", func() (Source, error) {
+		atomic.AddInt32(&calls, 1)
+		return Source{Answer: "B 的文档里写着 5 天"}, nil
+	})
+	if err != nil {
+		t.Fatalf("B 回源失败: %v", err)
+	}
+	if bob.Level == LevelExact || bob.Level == LevelSemantic {
+		t.Fatalf("B 不该命中 A 的缓存，实际 level=%s", bob.Level)
+	}
+	if bob.Answer != "B 的文档里写着 5 天" {
+		t.Fatalf("B 拿到了别人的答案: %q", bob.Answer)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("两个用户各回源一次，应共 2 次，实际 %d 次", got)
+	}
+}
+
+// TestCoordinatorRejectsEmptyUser 拿不到用户身份时整条缓存链路必须跳过。
+//
+// fail closed：身份不明就不缓存，绝不退化成"所有人共用一个命名空间"——
+// 那正是修复前的行为。
+func TestCoordinatorRejectsEmptyUser(t *testing.T) {
+	setupConfig(t)
+
+	c := &Coordinator{exact: newExactCache(100), neg: newNegativeCache(time.Minute)}
+
+	var calls int32
+	gen := func() (Source, error) {
+		atomic.AddInt32(&calls, 1)
+		return Source{Answer: "答案"}, nil
+	}
+	anon := Key{Model: "2|qwen"}
+
+	for i := 0; i < 3; i++ {
+		hit, err := c.Do(context.Background(), anon, "q", gen)
+		if err != nil {
+			t.Fatalf("第 %d 次回源失败: %v", i, err)
+		}
+		if hit.Level != LevelMiss {
+			t.Fatalf("匿名请求不该命中缓存，实际 level=%s", hit.Level)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Fatalf("匿名请求每次都要回源，实际回源 %d 次", got)
+	}
+	if n := c.exact.Len(); n != 0 {
+		t.Fatalf("匿名请求不该写进缓存，实际 %d 条", n)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	agentcore "deeptalk/internal/agent/core"
+	"deeptalk/internal/agent/guard"
 	agenttool "deeptalk/internal/agent/tool"
 
 	"github.com/cloudwego/eino/components/model"
@@ -208,5 +209,69 @@ func TestReActAgentRejectsEmptyMessages(t *testing.T) {
 func TestNewReActAgentRequiresModel(t *testing.T) {
 	if _, err := agentcore.NewReActAgent(context.Background(), agentcore.ReActConfig{}); err == nil {
 		t.Fatal("没有模型时应构造失败")
+	}
+}
+
+// ==================== 预算生命周期（回归） ====================
+
+// TestBudgetResetsPerTurn 预算是**轮级**的，不是 Agent 级。
+//
+// 回归的正是真实踩到的坑：Agent（连同它的 Budget）随会话复用，
+// 而 Budget 的三个计数只在构造时初始化、从不重置，于是 maxSteps=8 的语义
+// 实际变成"整个会话累计 8 次模型调用"——会话跑到第 9 轮就永久失败，
+// 直到空闲 30 分钟被 janitor 淘汰。用户看到的是"模型运行失败"。
+//
+// 之所以拖到现在才暴露：既有单测每例都新建 Agent，恰好把这个跨轮复用
+// 的行为掩盖掉了。所以这个用例刻意**复用同一个 Agent** 连跑多轮。
+func TestBudgetResetsPerTurn(t *testing.T) {
+	agent, err := agentcore.NewReActAgent(context.Background(), agentcore.ReActConfig{
+		Model: &plainModel{},
+		Limits: guard.Limits{
+			MaxSteps:  2, // 每轮最多 2 次模型调用
+			MaxTokens: 100000,
+		},
+	})
+	if err != nil {
+		t.Fatalf("构造 Agent 失败: %v", err)
+	}
+
+	req := agentcore.Request{Messages: []*schema.Message{{Role: schema.User, Content: "在吗"}}}
+	for i := 1; i <= 10; i++ {
+		if _, err := agent.Run(context.Background(), req); err != nil {
+			t.Fatalf("第 %d 轮失败——预算没有按轮重置，累计起来了: %v", i, err)
+		}
+	}
+}
+
+// TestBudgetStillLimitsWithinTurn 按轮重置不等于取消上限：
+// 单轮内该卡住还是要卡住，否则预算就成了摆设。
+func TestBudgetStillLimitsWithinTurn(t *testing.T) {
+	reg := agenttool.NewRegistry()
+	if err := reg.Register(agenttool.ToolSpec{
+		Name:    "fake_echo",
+		Handler: func(context.Context, string) (string, error) { return "tool-result", nil },
+	}); err != nil {
+		t.Fatalf("注册工具失败: %v", err)
+	}
+
+	agent, err := agentcore.NewReActAgent(context.Background(), agentcore.ReActConfig{
+		Model:   &fakeToolModel{st: &fakeState{}},
+		Tools:   reg.Tools(context.Background()),
+		MaxStep: 4,
+		// 本轮需要 2 次模型调用（发起工具调用 + 汇总答案），只给 1 次必然超限
+		Limits: guard.Limits{MaxSteps: 1},
+	})
+	if err != nil {
+		t.Fatalf("构造 Agent 失败: %v", err)
+	}
+
+	_, err = agent.Run(context.Background(), agentcore.Request{
+		Messages: []*schema.Message{{Role: schema.User, Content: "你好"}},
+	})
+	if err == nil {
+		t.Fatal("单轮内超过 MaxSteps 必须失败，否则预算形同虚设")
+	}
+	if !strings.Contains(err.Error(), "budget exceeded") {
+		t.Fatalf("应是预算耗尽错误，实际 %v", err)
 	}
 }

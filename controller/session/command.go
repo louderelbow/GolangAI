@@ -28,6 +28,7 @@ func CreateSessionAndSendMessage(c *gin.Context) {
 		res.SessionID = result.SessionID
 		res.ModelType = result.ModelType
 		res.Clarify = clarifyPayload(result.Clarify)
+		res.Warnings = result.Warnings
 		c.JSON(http.StatusOK, res)
 		return
 	}
@@ -40,6 +41,7 @@ func CreateSessionAndSendMessage(c *gin.Context) {
 	res.AiInformation = result.Answer
 	res.SessionID = result.SessionID
 	res.ModelType = result.ModelType
+	res.Warnings = result.Warnings
 	c.JSON(http.StatusOK, res)
 }
 
@@ -51,23 +53,29 @@ func ChatSend(c *gin.Context) {
 		return
 	}
 
-	answer, clarify, resultCode := service.ChatSend(
+	answer, clarify, warnings, resultCode := service.ChatSend(
 		c.Request.Context(), c.GetString("userName"), req.SessionID, req.UserQuestion, req.ModelType,
 		clarifyContext(req.ClarifyAnswer),
 	)
+
+	// 告警在三条路径上都要带上：它是"回答可能不完整"，不是失败本身
 	if resultCode == code.CodeNeedClarify {
 		res.CodeOf(code.CodeNeedClarify)
 		res.Clarify = clarifyPayload(clarify)
+		res.Warnings = warnings
 		c.JSON(http.StatusOK, res)
 		return
 	}
 	if resultCode != code.CodeSuccess {
-		c.JSON(http.StatusOK, res.CodeOf(resultCode))
+		res.CodeOf(resultCode)
+		res.Warnings = warnings
+		c.JSON(http.StatusOK, res)
 		return
 	}
 
 	res.Success()
 	res.AiInformation = answer
+	res.Warnings = warnings
 	c.JSON(http.StatusOK, res)
 }
 
@@ -77,7 +85,7 @@ func clarifyContext(a *ClarifyAnswer) *service.ClarifyContext {
 	if a == nil {
 		return nil
 	}
-	return &service.ClarifyContext{Question: a.Question, Label: a.Label}
+	return &service.ClarifyContext{Question: a.Question, Label: a.Label, Custom: a.Custom}
 }
 
 // clarifyPayload 把 Agent 抛出的澄清请求转成对外的响应结构。

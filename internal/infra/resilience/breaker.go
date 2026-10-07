@@ -29,12 +29,12 @@ func IsOpen(err error) bool { return errors.Is(err, ErrOpen) }
 //
 //	llm:<model>     各模型独立——DeepSeek 挂了不该影响 DashScope
 //	redis:<用途>    限流、配额分别熔断（配额挂了不该影响限流）
-//	mcp:<tool>      每个工具独立，一个坏工具不拖垮其它工具
+//	tool:<name>     每个工具独立，一个坏工具不拖垮其它工具
 //	http:<service>  外部 HTTP（图片识别 / TTS / 天气）
 const (
 	PrefixLLM   = "llm:"
 	PrefixRedis = "redis:"
-	PrefixMCP   = "mcp:"
+	PrefixTool  = "tool:"
 	PrefixHTTP  = "http:"
 )
 
@@ -106,6 +106,18 @@ func (r *registry) breaker(name string) *gobreaker.CircuitBreaker[any] {
 	})
 
 	r.breakers[name] = b
+
+	// 创建时就把初始状态写进指标。
+	//
+	// OnStateChange **只在状态变化时**触发，所以一个创建后一直是 closed
+	// （也就是一切正常）的熔断器，在 /metrics 里根本不会出现 ——
+	// 结果是 Grafana 上"熔断器状态"面板永远是 No data，
+	// 而看的人分不清"熔断器是关着的（健康）"还是"指标压根没采到"。
+	//
+	// 这类"只有在异常时才有数据"的指标最危险：它把**正常**渲染成了**缺失**。
+	// 指标应当在系统健康时就明确地表示健康。
+	metrics.SetCircuitState(name, b.State().String())
+
 	return b
 }
 
@@ -163,8 +175,11 @@ func ModelKey(modelName string) string {
 	return PrefixLLM + strings.TrimSpace(modelName)
 }
 
-// MCPKey 工具名 → 熔断器名
-func MCPKey(toolName string) string { return PrefixMCP + toolName }
+// ToolKey 工具名 → 熔断器名。
+//
+// 本地工具与 MCP 工具共用一个命名空间：从"这个工具健不健康"的角度看，
+// 它从哪来并不重要，分成两套只会让排查时多查一个地方。
+func ToolKey(toolName string) string { return PrefixTool + toolName }
 
 // HTTPKey 外部服务名 → 熔断器名
 func HTTPKey(service string) string { return PrefixHTTP + service }

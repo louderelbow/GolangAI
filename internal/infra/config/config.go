@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -122,6 +123,26 @@ type AgentConfig struct {
 	ToolTimeoutSeconds  int `toml:"toolTimeoutSeconds"`  // 单次工具调用超时，秒（默认 15）
 	ModelTimeoutSeconds int `toml:"modelTimeoutSeconds"` // 单次模型调用超时，秒（默认 60）
 	ToolMaxAttempts     int `toml:"toolMaxAttempts"`     // 幂等工具最大尝试次数（默认 2）
+
+	// LoopGuardThreshold 同一个 (工具 + 参数) 成功调用多少次后开始拦截。
+	//
+	// 默认 3；设成负数可以关掉（排查"某个工具确实需要重复调用"时用）。
+	// 详见 internal/agent/tool/loopguard.go 的三条边界。
+	LoopGuardThreshold int `toml:"loopGuardThreshold"`
+
+	// ==================== 调试开关（生产必须留空） ====================
+	//
+	// ForceClarifyQuestion 非空时，**会话首轮**无论模型有没有调用 ask_user，
+	// 都会抛出这个澄清提问；模型自己抛的会被它覆盖（保证演示可复现）。
+	//
+	// 存在的理由：模型要不要调工具是概率事件（qwen-turbo 实测约一半一半），
+	// 而"前端弹窗长什么样""选择有没有进上下文"这两段必须能被确定性地验收，
+	// 不该赌模型的心情。
+	//
+	// 只在首轮生效是刻意的：若每轮都弹，用户永远走不到"选完 → 给出答案"，
+	// 这条链路也就测不完整了。
+	ForceClarifyQuestion string   `toml:"forceClarifyQuestion"`
+	ForceClarifyOptions  []string `toml:"forceClarifyOptions"`
 }
 
 func (c AgentConfig) withDefaults() AgentConfig {
@@ -148,6 +169,117 @@ func (c AgentConfig) withDefaults() AgentConfig {
 
 // GetAgent 返回补全默认值后的 Agent 约束。
 func (c *Config) GetAgent() AgentConfig { return c.AgentConfig.withDefaults() }
+
+// ==================== Unified Agent 专用上游 ====================
+
+// AgentModelConfig [agentModel] 段：Unified Agent 用的模型，与 RAG 分开配置。
+//
+// 为什么不复用 [ragModelConfig]：两者对模型的要求不同。
+// RAG 是"检索 + 一次直答"，便宜够用即可；Unified Agent 要在 ReAct 循环里
+// 反复决定"调不调工具、参数怎么给"，必须支持可靠的 function calling。
+// 共用一个模型名时只能迁就一边——要么 RAG 白花钱，要么 Agent 经常不调工具。
+//
+// 三段（模型名 / baseURL / key）各自独立回落：整段留空时 Unified Agent
+// 与 RAG 共用 [ragModelConfig]，行为与改动前完全一致。
+type AgentModelConfig struct {
+	ChatModelName string `toml:"chatModelName"`
+	BaseUrl       string `toml:"baseUrl"`
+	ApiKey        string `toml:"apiKey"`
+	// ApiKeyEnv 指定从哪个环境变量读 key。
+	// 本段配了独立上游却没写 apiKey 时，默认读 DEEPSEEK_API_KEY。
+	ApiKeyEnv string `toml:"apiKeyEnv"`
+	// FallbackModels 本段独立上游的备用模型（同一 baseURL / key）。
+	// 不写则见 AgentFallbackModels 的回落规则。
+	FallbackModels []string `toml:"fallbackModels"`
+}
+
+// RagApiKey 取 [ragModelConfig] 上游的 key：配置值优先，其次常见环境变量。
+//
+// 抽出来是因为同一段兜底顺序原先在 model_rag、model_unified、
+// decision.NewIntentLLM 各抄了一遍——改一处顺序要同步三处，迟早漏一个。
+func (c *Config) RagApiKey() string {
+	if k := strings.TrimSpace(c.RagModelConfig.RagApiKey); k != "" {
+		return k
+	}
+	for _, env := range []string{"ALIYUN_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"} {
+		if k := os.Getenv(env); k != "" {
+			return k
+		}
+	}
+	return ""
+}
+
+// AgentModel 返回 Unified Agent 实际使用的 模型名 / baseURL / API Key。
+//
+// key 的解析顺序：
+//  1. [agentModel].apiKey（写死在配置里）
+//  2. [agentModel].apiKeyEnv 指定的环境变量（默认 DEEPSEEK_API_KEY）
+//  3. 与 RAG 同一套兜底（RagApiKey）
+func (c *Config) AgentModel() (name, baseURL, apiKey string) {
+	am := c.AgentModelConfig
+
+	name = strings.TrimSpace(am.ChatModelName)
+	if name == "" {
+		name = c.RagModelConfig.RagChatModelName
+	}
+
+	baseURL = strings.TrimSpace(am.BaseUrl)
+	if baseURL == "" {
+		baseURL = c.RagModelConfig.RagBaseUrl
+	}
+
+	if k := strings.TrimSpace(am.ApiKey); k != "" {
+		return name, baseURL, k
+	}
+
+	// 配了独立上游却只写了 baseUrl 时，默认去读 DEEPSEEK_API_KEY。
+	// 刻意不默认读 ALIYUN_API_KEY：两个变量常常同时存在（.env 里就都有），
+	// 拿错一把的结果是一个看不懂的 401，而不是一句能照着改的提示。
+	envName := strings.TrimSpace(am.ApiKeyEnv)
+	if envName == "" && (am.ChatModelName != "" || am.BaseUrl != "") {
+		envName = "DEEPSEEK_API_KEY"
+	}
+	if envName != "" {
+		if k := os.Getenv(envName); k != "" {
+			return name, baseURL, k
+		}
+		log.Printf("[config] ⚠️ [agentModel] 配了独立上游，但环境变量 %s 为空；"+
+			"将回落到 RAG 的 key（对 DeepSeek 多半会 401）", envName)
+	}
+
+	return name, baseURL, c.RagApiKey()
+}
+
+// AgentFallbackModels 返回 Unified Agent 的备用模型名。
+func (c *Config) AgentFallbackModels() []string {
+	if c.AgentModelConfig.FallbackModels != nil {
+		return c.AgentModelConfig.FallbackModels
+	}
+	// 换了上游还沿用 [llm] 里的模型名，等于拿 DeepSeek 的地址去请求 qwen-turbo，
+	// 每次兜底都必然失败——这种"假兜底"比没有兜底更糟（多一次失败计数，
+	// 还可能把熔断器推向 open）。所以换上游时默认不给兜底。
+	base := strings.TrimSpace(c.AgentModelConfig.BaseUrl)
+	if base != "" && base != c.RagModelConfig.RagBaseUrl {
+		return nil
+	}
+	return c.LLMConfig.FallbackModels
+}
+
+// LocalAgentConfig [localAgent] 段：允许模型查看**用户自己电脑**上的工作区。
+//
+// 默认关闭。这是一个"模型可以读用户硬盘"的能力，必须由部署者显式打开，
+// 而不是装完就有。打开后服务端会注册 list_files / read_file 两个工具；
+// 用户还没在自己电脑上启动 deeptalk-agent 时，这两个工具会回一句
+// "未连接"（而不是报错），模型据此如实告知用户。
+//
+// 真正的安全边界不在这里，而在本地 agent 那端：服务端只能请求，
+// 路径是否越界由用户机器上的进程判定。
+type LocalAgentConfig struct {
+	Enabled bool `toml:"enabled"`
+}
+
+// GetLocalAgent 返回本地工作区能力配置。
+func (c *Config) GetLocalAgent() LocalAgentConfig { return c.LocalAgentConfig }
 
 // LLMConfig 模型层的兜底配置（[llm] 段）。
 //
@@ -347,6 +479,8 @@ type Config struct {
 	MainConfig       `toml:"mainConfig"`
 	Rabbitmq         `toml:"rabbitmqConfig"`
 	RagModelConfig   `toml:"ragModelConfig"`
+	AgentModelConfig `toml:"agentModel"`
+	LocalAgentConfig `toml:"localAgent"`
 	AiPricingConfig  `toml:"aiPricing"`
 	AiPromptConfig   `toml:"aiPrompt"`
 	SemanticCache    SemanticCacheConfig `toml:"semanticCache"`

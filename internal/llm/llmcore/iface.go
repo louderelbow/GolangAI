@@ -8,10 +8,9 @@ import (
 )
 
 const (
-	ModelTypeDeepSeek = "1"
-	ModelTypeRAG      = "2"
-	ModelTypeUnified  = "6"
-	ModelTypeMulti    = "7"
+	ModelTypeRAG     = "2"
+	ModelTypeUnified = "6"
+	ModelTypeMulti   = "7"
 
 	DefaultModelType = ModelTypeRAG
 )
@@ -28,13 +27,18 @@ type AIModel interface {
 }
 
 // NormalizeModelType 把历史会话类型映射到仍受支持的执行路径。
+//
+// 现状只保留两条路径：2 RAG（确定性检索，必然查文档）与 6 Unified Agent
+// （自主决定用不用工具）。
+//
+// "1"（原 DeepSeek 纯对话）已删除。历史会话映射到 6 而不是 2：
+// 它当时就是"不带检索的通用对话"，映射到 RAG 会让一个从来不查文档的会话
+// 突然开始按文档回答，答案性质变了。Agent 更接近它原来的行为。
 func NormalizeModelType(modelType string) (string, bool) {
 	switch modelType {
 	case "", ModelTypeRAG:
 		return ModelTypeRAG, true
-	case ModelTypeDeepSeek:
-		return ModelTypeDeepSeek, true
-	case "3", "5", ModelTypeUnified:
+	case "1", "3", "5", ModelTypeUnified:
 		return ModelTypeUnified, true
 	case "4":
 		return ModelTypeRAG, true
@@ -47,5 +51,5 @@ func NormalizeModelType(modelType string) (string, bool) {
 
 // IsCreatableModelType 判断客户端是否可创建该类型的新会话。
 func IsCreatableModelType(modelType string) bool {
-	return modelType == ModelTypeDeepSeek || modelType == ModelTypeRAG || modelType == ModelTypeUnified
+	return modelType == ModelTypeRAG || modelType == ModelTypeUnified
 }

@@ -1,0 +1,1421 @@
+{
+  "title": "DeepTalk · AI 应用观测",
+  "uid": "deeptalk-overview",
+  "description": "容量视角（请求/token/费用）+ 效果视角（工具成功率/步数分布/澄清触发率）。后半部分是 AI 应用区别于普通后端的地方。",
+  "tags": [
+    "deeptalk",
+    "ai-agent",
+    "llm"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "请求速率",
+      "description": "所有 AI 请求的每秒速率（含缓存命中）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum(rate(deeptalk_ai_requests_total[5m]))",
+          "legendFormat": "全部请求",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "失败率",
+      "description": "status != ok 的占比。含 quota_exceeded（配额拦截是策略，不一定是故障）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 2,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.02
+                },
+                {
+                  "color": "red",
+                  "value": 0.1
+                }
+              ]
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "(\n  sum(rate(deeptalk_ai_requests_total{status!=\"ok\"}[5m])) / sum(rate(deeptalk_ai_requests_total[5m]))\n)\nand\n(sum(rate(deeptalk_ai_requests_total[5m])) > 0)",
+          "legendFormat": "失败率",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Agent 工具成功率",
+      "description": "status=\"ok\" 的占比。rejected（越界、熔断、配额）单独计，不算故障——否则模型反复试探越界路径会让它看起来像工具坏了",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 1,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.8
+                },
+                {
+                  "color": "green",
+                  "value": 0.95
+                }
+              ]
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "(\n  sum(rate(deeptalk_agent_tool_calls_total{status=\"ok\"}[5m])) / sum(rate(deeptalk_agent_tool_calls_total[5m]))\n)\nand\n(sum(rate(deeptalk_agent_tool_calls_total[5m])) > 0)",
+          "legendFormat": "成功率",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "澄清触发率",
+      "description": "每轮对话里 Agent 决定反问用户的比例。太高说明提示词没收紧，太低说明该问的没问",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 1,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "(\n  sum(rate(deeptalk_agent_clarify_total{outcome=\"asked\"}[5m])) / sum(rate(deeptalk_agent_turns_total[5m]))\n)\nand\n(sum(rate(deeptalk_agent_turns_total[5m])) > 0)",
+          "legendFormat": "触发率",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "澄清流失率",
+      "description": "问了但用户没答的比例。这个数字决定澄清功能该不该留。没有澄清发生时显示 No data —— 0 次澄清的流失率是\"无定义\"，不是 100%",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 1,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.3
+                },
+                {
+                  "color": "red",
+                  "value": 0.6
+                }
+              ]
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "(\n  1 - sum(rate(deeptalk_agent_clarify_total{outcome=\"answered\"}[5m])) / sum(rate(deeptalk_agent_clarify_total{outcome=\"asked\"}[5m]))\n)\nand\n(sum(rate(deeptalk_agent_clarify_total{outcome=\"asked\"}[5m])) > 0)",
+          "legendFormat": "流失率",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "本地连接器",
+      "description": "在线的工作区连接器数量",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "text",
+                  "value": null
+                },
+                {
+                  "color": "green",
+                  "value": 1
+                }
+              ]
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "max(deeptalk_local_agent_online)",
+          "legendFormat": "在线",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "ReAct 步数分布（每轮调用模型几次）",
+      "description": "Agent 效率的核心口径。长尾变厚 = 模型在空转（工具描述写得不好，它在瞎试）。注意：步数取自模型调用次数，不是工具调用次数——只想要不想做的 Agent 工具调用很少，那种空转只有看步数才看得出来",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(deeptalk_agent_steps_per_turn_bucket[15m])))\nand\n(sum (rate(deeptalk_agent_steps_per_turn_bucket[15m])) > 0)",
+          "legendFormat": "p50",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(deeptalk_agent_steps_per_turn_bucket[15m])))\nand\n(sum (rate(deeptalk_agent_steps_per_turn_bucket[15m])) > 0)",
+          "legendFormat": "p95",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(deeptalk_agent_steps_per_turn_bucket[15m])))\nand\n(sum (rate(deeptalk_agent_steps_per_turn_bucket[15m])) > 0)",
+          "legendFormat": "p99",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "单轮耗时",
+      "description": "一轮对话从进门到出答案的总时长（含所有工具往返）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(deeptalk_agent_turn_duration_seconds_bucket[5m])))\nand\n(sum (rate(deeptalk_agent_turn_duration_seconds_bucket[5m])) > 0)",
+          "legendFormat": "p50",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(deeptalk_agent_turn_duration_seconds_bucket[5m])))\nand\n(sum (rate(deeptalk_agent_turn_duration_seconds_bucket[5m])) > 0)",
+          "legendFormat": "p95",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(deeptalk_agent_turn_duration_seconds_bucket[5m])))\nand\n(sum (rate(deeptalk_agent_turn_duration_seconds_bucket[5m])) > 0)",
+          "legendFormat": "p99",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "工具调用速率（按工具与结局）",
+      "description": "status 的四种值：ok / error（意外）/ timeout / rejected（按策略拒绝：路径越界、熔断打开）。rejected 单列是刻意的，混进 error 会让成功率失去意义",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum by (tool, status) (rate(deeptalk_agent_tool_calls_total{tool!=\"none\"}[5m]))",
+          "legendFormat": "{{tool}} · {{status}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "工具调用耗时 p95",
+      "description": "按工具分开看。某个工具忽然变慢，通常在它自己的上游，而不是 Agent 循环",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (tool, le) (rate(deeptalk_agent_tool_duration_seconds_bucket{tool!=\"none\"}[5m])))\nand\n(sum by (tool) (rate(deeptalk_agent_tool_duration_seconds_bucket{tool!=\"none\"}[5m])) > 0)",
+          "legendFormat": "{{tool}} p95",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "模型调用延迟",
+      "description": "Agent 内部每一次模型调用的耗时（一轮可能有多次）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.50, sum by (model, le) (rate(deeptalk_agent_model_duration_seconds_bucket{model!=\"none\"}[5m])))\nand\n(sum by (model) (rate(deeptalk_agent_model_duration_seconds_bucket{model!=\"none\"}[5m])) > 0)",
+          "legendFormat": "{{model}} p50",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (model, le) (rate(deeptalk_agent_model_duration_seconds_bucket{model!=\"none\"}[5m])))\nand\n(sum by (model) (rate(deeptalk_agent_model_duration_seconds_bucket{model!=\"none\"}[5m])) > 0)",
+          "legendFormat": "{{model}} p95",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Token 速率（按类型）",
+      "description": "cached = 命中上游前缀缓存的那部分输入。它按 1/10 计费，所以这一条涨通常是好事",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum by (kind) (rate(deeptalk_ai_tokens_total[5m]))",
+          "legendFormat": "{{kind}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "费用（元/小时）",
+      "description": "把微元累计速率换算成每小时的元，比看累计值直观。命中上游前缀缓存的输入 token 已按 1/10 计过价，所以这条曲线本身就是折后价",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyCNY",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum(rate(deeptalk_ai_cost_micros_total[5m])) / 1e6 * 3600",
+          "legendFormat": "全部模型",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "缓存命中率（按层级）",
+      "description": "layer：exact（L1 精确）/ semantic（L2 语义）/ negative（空结果冷却）。命中率用 hit/(hit+miss) 现算，不用后端那个 gauge——多副本时各自算的 gauge 会互相覆盖",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 2,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "(\n  sum by (level) (rate(deeptalk_cache_hit_total[5m])) / (sum by (level) (rate(deeptalk_cache_hit_total[5m])) + sum by (level) (rate(deeptalk_cache_miss_total[5m])))\n)\nand\n((sum by (level) (rate(deeptalk_cache_hit_total[5m])) + sum by (level) (rate(deeptalk_cache_miss_total[5m]))) > 0)",
+          "legendFormat": "{{level}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "熔断器状态",
+      "description": "0=closed 1=half-open 2=open。任何一条跳到 2 都值得立刻看",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "deeptalk_circuit_breaker_state",
+          "legendFormat": "{{name}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "评测得分趋势",
+      "description": "来自 cmd/eval -metricsOut。分数本身是数字，**趋势**才是信息：一次 0.74 说明不了什么，连着 0.74 → 0.70 → 0.66 说明检索在退化",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 2,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "deeptalk_eval_score",
+          "legendFormat": "{{metric}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "上下文 token 构成",
+      "description": "kind：system / history / rag / tool / question。总和逼近模型上限而效果没提升，就是该做压缩或截断的信号",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "deeptalk_agent_context_tokens",
+          "legendFormat": "{{kind}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "轨迹步骤速率（按类型）",
+      "description": "kind：turn / model / tool / retrieve / clarify / cache。轨迹是\"这一轮到底怎么了\"的唯一答案——指标只说整体在变差",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 37
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum by (kind) (rate(deeptalk_agent_trace_spans_total[5m]))",
+          "legendFormat": "{{kind}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "轨迹落库结果",
+      "description": "落库失败不该影响对话（观测设施不能成为故障点），但要能看见",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 37
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum by (result) (rate(deeptalk_agent_trace_persist_total[5m]))",
+          "legendFormat": "{{result}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "在途 vs 排队",
+      "description": "inflight 逼近 maxConcurrent、同时 queue_depth 抬头 = 池子开始不够用。两条线一起看才有意义：只看其中一个分不清\"忙但顺畅\"和\"忙到堵住\"",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum by (model) (deeptalk_inference_inflight)",
+          "legendFormat": "{{model}} 在途",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum by (model) (deeptalk_inference_queue_depth)",
+          "legendFormat": "{{model}} 排队",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "排队等待时长",
+      "description": "从入队到拿到槽位的时间。它逼近 queueTimeout 就说明\"有效队列深度\"已经用满 —— 再来的请求只会排队等死",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.50, sum by (model, le) (rate(deeptalk_inference_queue_wait_ms_bucket[5m])))\nand\n(sum by (model) (rate(deeptalk_inference_queue_wait_ms_bucket[5m])) > 0)",
+          "legendFormat": "{{model}} p50",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (model, le) (rate(deeptalk_inference_queue_wait_ms_bucket[5m])))\nand\n(sum by (model) (rate(deeptalk_inference_queue_wait_ms_bucket[5m])) > 0)",
+          "legendFormat": "{{model}} p95",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "拒绝原因",
+      "description": "queue_full=队列满 / queue_timeout=排队超时 / breaker_open=准入熔断 / shutting_down=优雅关闭。**四种原因的处置完全不同**：队列满要提高并发，排队超时要缩队列，熔断要查下游",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "sum by (model, reason) (rate(deeptalk_inference_rejected_total[5m]))",
+          "legendFormat": "{{model}} · {{reason}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "准入熔断状态",
+      "description": "这是**调度层**的熔断（连续失败 N 次就在入队前快速拒绝），和上面 resilience 那个按失败率的模型熔断是两套，解决不同问题。0=closed 1=half-open 2=open",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "deeptalk-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 53
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "deeptalk-prom"
+          },
+          "expr": "deeptalk_inference_breaker_state",
+          "legendFormat": "{{model}}",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Annotations",
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        }
+      }
+    ]
+  }
+}

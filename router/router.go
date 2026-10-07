@@ -1,6 +1,8 @@
 package router
 
 import (
+	"deeptalk/controller/localagent"
+	"deeptalk/controller/trace"
 	"deeptalk/internal/infra/logger"
 	"deeptalk/internal/infra/metrics"
 	mw "deeptalk/middleware"
@@ -45,6 +47,29 @@ func InitRouter() *gin.Engine {
 		FileGroup.Use(jwt.Auth())
 		FileGroup.Use(mw.BodyLimit(mw.MaxUploadBodyBytes))
 		FileRouter(FileGroup)
+	}
+
+	{
+		// 本地 agent：一条 WebSocket 长连接，身份完全靠 JWT
+		// （原生客户端可以自己带 Authorization 头，没有同源限制）。
+		//
+		// 刻意不挂 BodyLimit / RateLimit：这是一条长驻连接而不是"请求"，
+		// 按请求计数的限流会把它误伤成反复重连。
+		LocalGroup := enterRouter.Group("/agent")
+		LocalGroup.Use(jwt.Auth())
+		LocalGroup.GET("/ws", localagent.Handle)
+		LocalGroup.GET("/status", localagent.Status)
+		LocalGroup.POST("/workspace", localagent.SetWorkspace)
+		LocalGroup.GET("/online", localagent.Online)
+	}
+
+	{
+		// 轨迹查询：只读、量小，跟着 AI 组一起限流即可。
+		TraceGroup := enterRouter.Group("/AI/trace")
+		TraceGroup.Use(jwt.Auth())
+		TraceGroup.Use(mw.RateLimit())
+		TraceGroup.GET("", trace.List)
+		TraceGroup.GET("/:id", trace.Get)
 	}
 
 	return r
