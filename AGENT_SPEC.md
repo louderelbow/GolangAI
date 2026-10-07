@@ -631,72 +631,7 @@ deeptalk_cache_breakdown_lock_wait_ms
 powershell
 go test ./internal/cache/... -v
 k6 run scripts/k6/cache_hit.js
-PHASE-6：分布式限流与配额 ★★ 核心新增
-前置：PHASE-5
-周期：4 天
-可停：是
 
-目标
-把单机限流升级为分布式限流 + 三层配额，支撑多实例部署。
-
-新增文件
-text
-internal/ratelimit/token_bucket.go
-internal/ratelimit/sliding_window.go
-internal/ratelimit/quota.go
-internal/ratelimit/fallback.go
-三层配额规格
-层级	key	默认配额	说明
-用户级	user:{name}	100 req/min	防止单用户刷
-模型级	model:{name}	1000 req/min	防止单模型被打爆
-全局级	global	5000 req/min	保护整个服务
-限流算法
-算法	使用场景	实现
-令牌桶	允许突发流量	Redis + Lua 原子操作
-滑动窗口	精确限流	Redis ZSET + Lua
-降级策略
-text
-Redis 不可用 → 本地令牌桶（单机限流，精度下降但不阻塞）
-Redis 超时 → 快速失败，走本地
-配额超限 → 返回 429 + Retry-After
-新增配置
-toml
-[ratelimit]
-enabled = true
-algorithm = "token_bucket"
-
-[ratelimit.user]
-limit = 100
-windowSeconds = 60
-
-[ratelimit.model]
-limit = 1000
-windowSeconds = 60
-
-[ratelimit.global]
-limit = 5000
-windowSeconds = 60
-
-[ratelimit.fallback]
-localLimit = 50
-localWindowSeconds = 60
-新增指标
-text
-deeptalk_ratelimit_allowed_total{level="user|model|global"}
-deeptalk_ratelimit_rejected_total{level="user|model|global"}
-deeptalk_ratelimit_redis_fallback_total
-deeptalk_ratelimit_redis_latency_ms{quantile="0.5|0.95|0.99"}
-验收
-验收项	期望
-用户级限流生效	单用户 1 分钟 200 请求，第 101 个返回 429
-模型级限流生效	单模型 1 分钟 1500 请求，第 1001 个返回 429
-Redis 降级	停掉 Redis，请求仍可用本地限流通过
-多实例共享配额	起 2 个服务实例，总配额仍是配置值
-限流精度	并发 1000 请求，实际通过数 ≈ 配额数（误差 < 5%）
-压测数据	限流下 QPS、P99、拒绝率有数据
-powershell
-go test ./internal/ratelimit/... -v
-k6 run scripts/k6/ratelimit.js
 PHASE-7：轨迹记录 + 流式步骤可视化 + 轨迹评测
 前置：PHASE-4
 周期：4 天
@@ -778,30 +713,7 @@ config/skills/doc_qa/prompt.md
 单个 skill 配置错误不影响启动	写错一个 skill.toml，服务正常启动
 工具名拼错有明确日志	日志出现 skill=demo missing tools=[xxx]
 禁用生效	enabled=false 后不出现在可用列表
-PHASE-9：上下文预算动态分配
-前置：PHASE-2
-周期：2 天
-可停：是（收尾）
 
-目标
-上下文各部分按比例动态分配 token，而非固定值。
-
-规格
-toml
-[agent.context]
-totalBudget = 8000
-ratioSystem = 0.10
-ratioMemory = 0.15
-ratioRetrieval = 0.45
-ratioHistory = 0.30
-minHistoryTurns = 3
-overflowPolicy = "shrink_retrieval"
-验收
-验收项	期望
-长对话不爆预算	20 轮对话，实际 token ≤ totalBudget
-检索结果优先裁剪	检索超长时，实际检索 token ≤ quota
-system 不被裁	任何情况下 system 完整保留
-分配结果可观测	轨迹表出现 step_type=context 行
 5. 全局禁止事项
 禁止	原因
 跳过 PHASE-3 直接做 PHASE-5/6	没有调度器，缓存和限流无意义

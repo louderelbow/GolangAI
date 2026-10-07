@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"deeptalk/internal/agent/askuser"
 	agentcore "deeptalk/internal/agent/core"
 	"deeptalk/internal/agent/guard"
 	agenttool "deeptalk/internal/agent/tool"
@@ -95,6 +96,16 @@ func NewUnifiedModel(ctx context.Context, username string) (*UnifiedModel, error
 	// 工具来源：本地注册（PHASE-8 的 skill 会向这里注册）+ MCP 注册表
 	registry := agenttool.NewRegistry()
 	registry.AddSource(agenttool.GetMCPRegistry().AsSource())
+
+	// 澄清式追问：信息不足且答案可枚举时，Agent 主动向用户提问并给选项。
+	// 只注册在统一 Agent 上——RAG / DeepSeek 是单轮直答路径，没有
+	// "停下来等用户"的语义，注入了也没人会去读那个收集器。
+	//
+	// 注册失败只记日志不阻断启动：一个工具装不上不该让整个 Agent 起不来。
+	if err := registry.Register(askuser.Tool()); err != nil {
+		log.Printf("[agent] ask_user 注册失败，本轮不提供澄清能力: %v", err)
+	}
+
 	tools := registry.Tools(ctx)
 
 	ac := conf.GetAgent()

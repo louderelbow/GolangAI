@@ -19,6 +19,13 @@ const (
 	CodeRateLimited   Code = 4002
 	CodeQuotaExceeded Code = 4003
 
+	// CodeNeedClarify 带外意图：模型认为信息不足、主动向用户提问。
+	//
+	// 它刻意不算"失败"（所以不放在 5xxx），也刻意不返回 1000——
+	// 前端必须能把"这是一句提问，不是回答"和普通成功区分开，
+	// 否则会把选择框当成答案直接渲染出来。
+	CodeNeedClarify Code = 3001
+
 	AIModelFail Code = 5003
 	// CodeAIServiceUnavailable AI 上游被熔断（连续失败后快速拒绝，不再打下游）
 	CodeAIServiceUnavailable Code = 5004
@@ -38,6 +45,7 @@ var msg = map[Code]string{
 	CodeServerBusy:    "服务繁忙",
 	CodeRateLimited:   "请求过于频繁，请稍后再试",
 	CodeQuotaExceeded: "今日 AI 调用配额已用尽，请明天再试",
+	CodeNeedClarify:   "需要您补充一点信息",
 
 	AIModelFail:              "模型运行失败",
 	CodeAIServiceUnavailable: "AI 服务暂时不可用，请稍后重试",

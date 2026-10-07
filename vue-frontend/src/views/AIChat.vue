@@ -82,13 +82,43 @@
         <div
           v-for="(message, index) in currentMessages"
           :key="index"
-          :class="['bubble', message.role === 'user' ? 'bubble-user' : 'bubble-ai']"
+          :class="['bubble', message.role === 'user' ? 'bubble-user' : (message.role === 'clarify' ? 'bubble-clarify' : 'bubble-ai')]"
         >
-          <div class="bubble-meta">
-            <span class="bubble-role">{{ message.role === 'user' ? '你' : 'AI' }}</span>
-            <span v-if="message.meta && message.meta.status === 'streaming'" class="streaming-dot"></span>
-          </div>
-          <div class="bubble-content" v-html="renderMarkdown(message.content)"></div>
+          <!-- 澄清提问：Agent 认为信息不足，弹选项让用户挑一个 -->
+          <template v-if="message.role === 'clarify'">
+            <div class="bubble-meta">
+              <span class="bubble-role">AI</span>
+              <span class="clarify-tag">需要你确认</span>
+            </div>
+            <div class="clarify-body">
+              <div class="clarify-question">{{ message.content }}</div>
+              <div v-if="message.reason" class="clarify-reason">{{ message.reason }}</div>
+              <div class="clarify-options">
+                <button
+                  v-for="opt in message.options"
+                  :key="opt.id"
+                  type="button"
+                  :class="['clarify-option', { chosen: message.chosen === opt.label }]"
+                  :disabled="!!message.chosen || loading"
+                  @click="answerClarify(message, opt)"
+                >
+                  <span class="clarify-option-label">{{ opt.label }}</span>
+                  <span v-if="opt.hint" class="clarify-option-hint">{{ opt.hint }}</span>
+                </button>
+              </div>
+              <div v-if="message.chosen" class="clarify-chosen">
+                已选择「{{ message.chosen }}」，正在继续…
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="bubble-meta">
+              <span class="bubble-role">{{ message.role === 'user' ? '你' : 'AI' }}</span>
+              <span v-if="message.meta && message.meta.status === 'streaming'" class="streaming-dot"></span>
+            </div>
+            <div class="bubble-content" v-html="renderMarkdown(message.content)"></div>
+          </template>
         </div>
       </div>
 
@@ -290,9 +320,24 @@ export default {
         ElMessage.warning('请输入消息内容')
         return
       }
-      const userMessage = { role: 'user', content: inputMessage.value }
-      const currentInput = inputMessage.value
+      const text = inputMessage.value
       inputMessage.value = ''
+      await submitMessage(text, null)
+    }
+
+    // answerClarify 用户点了澄清选项：把选择随**原问题**一起发回去。
+    //
+    // 服务端不保存"未完成的提问"这类会话状态，靠前端把原问题和选择一起带回，
+    // 因此刷新页面、换实例部署都不会把这个选择弄丢。
+    const answerClarify = async (message, opt) => {
+      if (message.chosen || loading.value) return
+      message.chosen = opt.label
+      currentMessages.value = [...currentMessages.value]
+      await submitMessage(message.ask || '', { question: message.content, label: opt.label })
+    }
+
+    const submitMessage = async (text, clarifyAnswer) => {
+      const userMessage = { role: 'user', content: text }
 
       currentMessages.value.push(userMessage)
       await nextTick()
@@ -301,9 +346,9 @@ export default {
       try {
         loading.value = true
         if (isStreaming.value) {
-          await handleStreaming(currentInput)
+          await handleStreaming(text, clarifyAnswer)
         } else {
-          await handleNormal(currentInput)
+          await handleNormal(text, clarifyAnswer)
         }
       } catch (err) {
         console.error('Send message error:', err)
@@ -320,7 +365,21 @@ export default {
       }
     }
 
-    async function handleStreaming(question) {
+    // pushClarify 把 Agent 的提问渲染成一个选择框气泡。
+    function pushClarify(payload, ask) {
+      currentMessages.value.push({
+        role: 'clarify',
+        content: String(payload.question || ''),
+        reason: payload.reason || '',
+        options: Array.isArray(payload.options) ? payload.options : [],
+        ask,          // 原问题：用户选完后要带着它一起回传
+        chosen: null
+      })
+      currentMessages.value = [...currentMessages.value]
+      nextTick().then(scrollToBottom)
+    }
+
+    async function handleStreaming(question, clarifyAnswer) {
       const aiMessage = { role: 'assistant', content: '', meta: { status: 'streaming' } }
       const aiMessageIndex = currentMessages.value.length
       currentMessages.value.push(aiMessage)
@@ -336,6 +395,7 @@ export default {
       const body = tempSession.value
         ? { question: question, modelType: requestModel }
         : { question: question, modelType: requestModel, sessionId: currentSessionId.value }
+      if (clarifyAnswer) body.clarifyAnswer = clarifyAnswer
 
       let streamError = ''
 
@@ -375,7 +435,7 @@ export default {
               continue
             }
 
-            // 新协议：所有事件都是 JSON（content / sessionId+modelType / error）
+            // 新协议：所有事件都是 JSON（content / sessionId+modelType / clarify / error）
             let payload = null
             if (data.startsWith('{')) {
               try { payload = JSON.parse(data) } catch (e) { payload = null }
@@ -384,6 +444,27 @@ export default {
             if (payload && typeof payload === 'object') {
               if (payload.error) {
                 streamError = String(payload.error)
+                continue
+              }
+              if (payload.type === 'clarify') {
+                // 这轮不是回答，而是提问：把占位的空气泡换成选择框。
+                // 若同时流出了半截正文（模型先说了半句再决定追问），
+                // 保留它并另起一个选择框气泡。
+                if (currentMessages.value[aiMessageIndex] && currentMessages.value[aiMessageIndex].content) {
+                  currentMessages.value[aiMessageIndex].meta = { status: 'done' }
+                  pushClarify(payload, question)
+                } else {
+                  currentMessages.value[aiMessageIndex] = {
+                    role: 'clarify',
+                    content: String(payload.question || ''),
+                    reason: payload.reason || '',
+                    options: Array.isArray(payload.options) ? payload.options : [],
+                    ask: question,
+                    chosen: null
+                  }
+                  currentMessages.value = [...currentMessages.value]
+                }
+                streamError = ''
                 continue
               }
               if (payload.sessionId) {
@@ -440,9 +521,32 @@ export default {
       }
     }
 
-    async function handleNormal(question) {
+    async function handleNormal(question, clarifyAnswer) {
       if (tempSession.value) {
-        const response = await api.post('/AI/chat/send-new-session', { question, modelType: selectedModel.value })
+        const body = { question, modelType: selectedModel.value }
+        if (clarifyAnswer) body.clarifyAnswer = clarifyAnswer
+        const response = await api.post('/AI/chat/send-new-session', body)
+
+        // 澄清（3001）：新会话第一轮就可能反问用户。
+        // 会话已经建好了，所以要照常切过去，只是把空气泡换成选择框。
+        if (response.data && response.data.status_code === 3001) {
+          const sessionId = String(response.data.sessionId || '')
+          if (sessionId) {
+            sessions.value[sessionId] = {
+              id: sessionId,
+              name: '新会话',
+              modelType: String(response.data.modelType || selectedModel.value),
+              messages: [{ role: 'user', content: question }]
+            }
+            currentSessionId.value = sessionId
+            tempSession.value = false
+            localStorage.setItem(LAST_SESSION_KEY, sessionId)
+            currentMessages.value = [{ role: 'user', content: question }]
+          }
+          pushClarify(response.data.clarify || {}, question)
+          return
+        }
+
         if (response.data && response.data.status_code === 1000) {
           const sessionId = String(response.data.sessionId)
           const modelType = String(response.data.modelType || selectedModel.value)
@@ -465,7 +569,17 @@ export default {
         const sessionMsgs = sessions.value[currentSessionId.value].messages
         sessionMsgs.push({ role: 'user', content: question })
         // 已有会话的模型由服务端按会话绑定决定，这里传值仅用于兼容
-        const response = await api.post('/AI/chat/send', { question, modelType: activeModel.value, sessionId: currentSessionId.value })
+        const body = { question, modelType: activeModel.value, sessionId: currentSessionId.value }
+        if (clarifyAnswer) body.clarifyAnswer = clarifyAnswer
+        const response = await api.post('/AI/chat/send', body)
+
+        // 澄清：本轮没有答案，少推一条助手消息，改推选择框
+        if (response.data && response.data.status_code === 3001) {
+          currentMessages.value = [...sessionMsgs]
+          pushClarify(response.data.clarify || {}, question)
+          return
+        }
+
         if (response.data && response.data.status_code === 1000) {
           const aiMessage = { role: 'assistant', content: response.data.Information || '' }
           sessionMsgs.push(aiMessage)
@@ -531,7 +645,7 @@ export default {
       messagesRef, messageInput, selectedModel, isStreaming, uploading, fileInput,
       MODEL_OPTIONS, modelSelectValue, modelLocked, modelHint,
       dotStyle, renderMarkdown, createNewSession, switchSession, syncHistory,
-      sendMessage, triggerFileUpload, handleFileUpload
+      sendMessage, answerClarify, triggerFileUpload, handleFileUpload
     }
   }
 }
@@ -867,6 +981,93 @@ export default {
   border: 1px solid rgba(255, 255, 255, 0.06);
   color: rgba(255, 255, 255, 0.85);
   border-bottom-left-radius: 6px;
+}
+
+/* ---- 澄清提问（Agent 主动追问）---- */
+.bubble-clarify {
+  align-self: flex-start;
+  max-width: 82%;
+  background: rgba(30, 34, 58, 0.92);
+  border: 1px solid rgba(120, 150, 255, 0.32);
+  color: rgba(255, 255, 255, 0.88);
+  border-bottom-left-radius: 6px;
+}
+
+.clarify-tag {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  color: #9db4ff;
+  background: rgba(120, 150, 255, 0.14);
+  border: 1px solid rgba(120, 150, 255, 0.28);
+}
+
+.clarify-question {
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 4px;
+}
+
+.clarify-reason {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 10px;
+}
+
+.clarify-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.clarify-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 96px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(120, 150, 255, 0.10);
+  border: 1px solid rgba(120, 150, 255, 0.34);
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.clarify-option:hover:not(:disabled) {
+  background: rgba(120, 150, 255, 0.20);
+  border-color: rgba(120, 150, 255, 0.6);
+  transform: translateY(-1px);
+}
+
+.clarify-option:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.clarify-option.chosen {
+  opacity: 1;
+  color: #fff;
+  background: rgba(120, 150, 255, 0.30);
+  border-color: rgba(120, 150, 255, 0.85);
+}
+
+.clarify-option-label {
+  font-weight: 500;
+}
+
+.clarify-option-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.clarify-chosen {
+  margin-top: 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .bubble-meta {

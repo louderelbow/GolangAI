@@ -216,6 +216,9 @@ const (
 	// RAG 指代消解（PHASE-4）
 	MetricRagRewrite = "deeptalk_rag_rewrite_total" // labels: result=rewritten|skipped|fallback_*
 
+	// 澄清式追问
+	MetricAgentAskUser = "deeptalk_agent_ask_user_total" // Agent 主动向用户提问的次数
+
 	// 多级缓存（PHASE-5）
 	MetricCacheHit                = "deeptalk_cache_hit_total"          // labels: level=exact|semantic|negative
 	MetricCacheMiss               = "deeptalk_cache_miss_total"         // labels: level
@@ -231,6 +234,11 @@ const (
 // result 取 rewritten / skipped / fallback_empty / fallback_error / fallback_timeout。
 func CountRagRewrite(result string) {
 	Count(MetricRagRewrite, Labels{"result": result}, 1)
+}
+
+// CountAgentAskUser 记录一次 Agent 发起的澄清提问。
+func CountAgentAskUser() {
+	Count(MetricAgentAskUser, nil, 1)
 }
 
 // ======================== Agent 可靠性便捷计数 ========================
@@ -437,6 +445,7 @@ func RegisterHelp() {
 	Describe(MetricAgentDegraded, "Agent 降级次数（重试/备用模型/纯对话/错误）")
 	Describe(MetricAgentTimeout, "Agent 超时次数（工具/模型/整轮）")
 	Describe(MetricRagRewrite, "RAG 指代消解结果（改写/跳过/各降级原因）")
+	Describe(MetricAgentAskUser, "Agent 主动向用户发起澄清提问的次数")
 
 	// 多级缓存（PHASE-5）
 	Describe(MetricCacheHit, "缓存命中次数（按层级）")
@@ -465,6 +474,7 @@ func RegisterHelp() {
 	for _, result := range []string{"rewritten", "skipped", "fallback_empty", "fallback_error", "fallback_timeout"} {
 		Count(MetricRagRewrite, Labels{"result": result}, 0)
 	}
+	Count(MetricAgentAskUser, nil, 0)
 	for _, level := range []string{CacheLevelExact, CacheLevelSemantic, CacheLevelNegative} {
 		Count(MetricCacheHit, Labels{"level": level}, 0)
 		Count(MetricCacheMiss, Labels{"level": level}, 0)

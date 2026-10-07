@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"deeptalk/common/code"
+	"deeptalk/internal/agent/askuser"
 	service "deeptalk/service/session"
 
 	"github.com/gin-gonic/gin"
@@ -30,11 +31,11 @@ func CreateStreamSessionAndSendMessage(c *gin.Context) {
 		return
 	}
 
-	resultCode = service.StreamMessageToExistingSession(
-		c.Request.Context(), c.GetString("userName"), sessionID, req.UserQuestion, req.ModelType,
+	clarify, resultCode := service.StreamMessageToExistingSession(
+		c.Request.Context(), c.GetString("userName"), sessionID, req.UserQuestion, req.ModelType, nil,
 		func(chunk string) error { return writeSSEJSON(c, map[string]string{"content": chunk}) },
 	)
-	finishSSE(c, resultCode)
+	finishStream(c, clarify, resultCode)
 }
 
 func ChatStreamSend(c *gin.Context) {
@@ -45,11 +46,44 @@ func ChatStreamSend(c *gin.Context) {
 	}
 
 	prepareSSE(c)
-	resultCode := service.StreamMessageToExistingSession(
+	clarify, resultCode := service.StreamMessageToExistingSession(
 		c.Request.Context(), c.GetString("userName"), req.SessionID, req.UserQuestion, req.ModelType,
+		clarifyContext(req.ClarifyAnswer),
 		func(chunk string) error { return writeSSEJSON(c, map[string]string{"content": chunk}) },
 	)
+	finishStream(c, clarify, resultCode)
+}
+
+// finishStream 收尾流式响应。
+//
+// 澄清事件先于结束标记发出：前端收到 clarify 就知道该弹选择框，
+// 而不是显示一个空回答。它带 type 字段，与普通内容块区分开——
+// 旧前端只会多忽略一个字段，不会因此报错。
+func finishStream(c *gin.Context, clarify *askuser.Request, resultCode code.Code) {
+	if clarify != nil {
+		_ = writeSSEJSON(c, map[string]any{
+			"type":     "clarify",
+			"question": clarify.Question,
+			"reason":   clarify.Reason,
+			"options":  clarifyOptionMaps(clarify),
+		})
+		_, _ = c.Writer.WriteString("data: [DONE]\n\n")
+		c.Writer.Flush()
+		return
+	}
 	finishSSE(c, resultCode)
+}
+
+func clarifyOptionMaps(req *askuser.Request) []map[string]string {
+	out := make([]map[string]string, 0, len(req.Options))
+	for _, o := range req.Options {
+		m := map[string]string{"id": o.ID, "label": o.Label}
+		if o.Hint != "" {
+			m["hint"] = o.Hint
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func prepareSSE(c *gin.Context) {

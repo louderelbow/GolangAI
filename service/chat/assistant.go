@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"deeptalk/internal/agent/askuser"
 	agentmemory "deeptalk/internal/agent/memory"
 	"deeptalk/internal/infra/rabbitmq"
 	llmpkg "deeptalk/internal/llm"
@@ -29,6 +30,11 @@ type AIHelper struct {
 	//一个会话绑定一个AIHelper
 	SessionID string
 	saveFunc  func(*model.Message) (*model.Message, error)
+
+	// clarify 本轮 Agent 抛出的澄清提问（没有则为 nil）。
+	// 由收尾逻辑写入、由上层在一轮结束后立刻取走：
+	// 留着不清会让下一次普通回答被误判成"又在提问"。
+	clarify *askuser.Request
 }
 
 // NewAIHelper 创建新的AIHelper实例
@@ -101,6 +107,25 @@ func (a *AIHelper) AddMessage(Content string, UserName string, IsUser bool, Save
 	if Save {
 		a.saveFunc(&userMsg)
 	}
+}
+
+// setClarify 记录本轮 Agent 抛出的澄清提问。
+func (a *AIHelper) setClarify(req askuser.Request) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.clarify = &req
+}
+
+// TakeClarify 取出并清空本轮的澄清提问（没有则返回 nil）。
+//
+// 由上层在一轮结束后立刻调用。必须"取走"而不是"读取"：
+// 否则下一次普通回答会被误判成又需要澄清。
+func (a *AIHelper) TakeClarify() *askuser.Request {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	req := a.clarify
+	a.clarify = nil
+	return req
 }
 
 // GetMessages 获取所有消息历史

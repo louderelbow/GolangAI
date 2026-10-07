@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"deeptalk/internal/agent/askuser"
 	cachepkg "deeptalk/internal/cache"
 	"deeptalk/internal/infra/metrics"
 	"deeptalk/internal/infra/resilience"
@@ -19,6 +20,10 @@ func (a *AIHelper) GenerateResponse(ctx context.Context, userName string, userQu
 	a.turn.Lock()
 	defer a.turn.Unlock()
 	a.touch()
+
+	// 澄清式追问：本轮可能以"Agent 反问用户"收尾而不是给出答案。
+	// 收集器的生命周期与本轮严格一致——在这里放进 ctx，在本轮结束前取走。
+	ctx = askuser.WithCollector(ctx, askuser.NewCollector())
 
 	//调用存储函数
 	a.AddMessage(userQuestion, userName, true, true)
@@ -60,23 +65,29 @@ func (a *AIHelper) GenerateResponse(ctx context.Context, userName string, userQu
 
 	answer := ""
 	level := cachepkg.LevelMiss
+	var genErr error
 	if firstTurn {
 		// 多级缓存 + 击穿防护：
 		// 同一个 key 的并发回源只真正执行一次，其余请求共享结果——
 		// 否则"热点 key 刚失效"会变成"模型被打 N 次"。
-		hit, err := cachepkg.GetCoordinator().Do(ctx, modelKey, userQuestion, generate)
-		if err != nil {
-			recordAIFailure(userName, modelName, modelType, start, err)
-			return nil, err
-		}
+		var hit cachepkg.Hit
+		hit, genErr = cachepkg.GetCoordinator().Do(ctx, modelKey, userQuestion, generate)
 		answer, level = hit.Answer, hit.Level
 	} else {
-		src, err := generate()
-		if err != nil {
-			recordAIFailure(userName, modelName, modelType, start, err)
-			return nil, err
-		}
+		var src cachepkg.Source
+		src, genErr = generate()
 		answer = src.Answer
+	}
+
+	// 澄清请求优先于错误：Agent 是靠"让 ask_user 工具报错"来中断本轮的，
+	// 所以必须先看收集器，否则一次正常的反问会被当成整轮失败。
+	if req := a.finishClarify(ctx, userName, modelType, modelName, start); req != nil {
+		return &model.Message{SessionID: a.SessionID, UserName: userName, Content: req.AsText(), IsUser: false}, nil
+	}
+
+	if genErr != nil {
+		recordAIFailure(userName, modelName, modelType, start, genErr)
+		return nil, genErr
 	}
 
 	if level != cachepkg.LevelMiss {
@@ -96,6 +107,10 @@ func (a *AIHelper) StreamResponse(ctx context.Context, userName string, cb llmpk
 	a.turn.Lock()
 	defer a.turn.Unlock()
 	a.touch()
+
+	// 澄清式追问：流式路径同样支持——Agent 反问时不会有内容流出，
+	// controller 会改发一个 clarify 事件，而不是把提问当作正文推送。
+	ctx = askuser.WithCollector(ctx, askuser.NewCollector())
 
 	//调用存储函数
 	a.AddMessage(userQuestion, userName, true, true)
@@ -135,6 +150,12 @@ func (a *AIHelper) StreamResponse(ctx context.Context, userName string, cb llmpk
 		content, usage, e = a.model.StreamResponse(ctx, a.schemaMessages(), cb)
 		return e
 	})
+
+	// 澄清请求优先于错误：（与同步路径同理）ask_user 是用工具报错中断本轮的
+	if req := a.finishClarify(ctx, userName, modelType, modelName, start); req != nil {
+		return &model.Message{SessionID: a.SessionID, UserName: userName, Content: req.AsText(), IsUser: false}, nil
+	}
+
 	if err != nil {
 		recordAIFailure(userName, modelName, modelType, start, err)
 		return nil, err

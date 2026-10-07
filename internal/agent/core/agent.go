@@ -25,6 +25,10 @@ type Request struct {
 //
 // 只保留当前确实能填充的字段：不能验证的字段一律不加，
 // 否则会出现"接口上有、实际永远是零值"的假象。
+//
+// 关于"本轮是回答还是反问"：那是**轮次级**的结论，由服务层从本轮的
+// askuser 收集器里读。这里刻意不掺和——收集器只能被消费一次，
+// 核心层也读一遍的话，服务层就拿不到东西了（这个坑踩过）。
 type Response struct {
 	Content string
 	Usage   *schema.TokenUsage

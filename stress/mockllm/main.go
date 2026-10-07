@@ -57,6 +57,7 @@ type server struct {
 	cachedRatio float64       // 上报的 cache 命中比例（1.0 = 全部输入 token 都算命中）
 	replyRunes  int           // 回复长度（字符数）
 	toolCall    string        // 非空时总是返回一次工具调用（用于打满 ReAct 的 MaxStep）
+	toolArgs    string        // 该工具调用的参数 JSON
 
 	started time.Time
 	stats   stats
@@ -226,7 +227,7 @@ func (s *server) buildToolCall(req chatRequest) map[string]any {
 		"type": "function",
 		"function": map[string]any{
 			"name":      name,
-			"arguments": "{}",
+			"arguments": s.toolArgs,
 		},
 	}
 }
@@ -567,7 +568,17 @@ func main() {
 	cachedRatio := flag.Float64("cachedRatio", 0.8, "上报的前缀缓存命中比例（0~1）")
 	replyRunes := flag.Int("replyRunes", 80, "回复字符数")
 	toolCall := flag.String("toolCall", "", "非空则总是返回该名字的工具调用（用于打满 ReAct MaxStep）")
+	toolArgs := flag.String("toolArgs", "{}", "toolCall 的参数 JSON。默认 {} 只够验证循环；验证 ask_user 这类需要真实参数的工具时要显式给出")
+	toolArgsFile := flag.String("toolArgsFile", "", "从文件读取 toolCall 参数 JSON，优先于 -toolArgs。参数里带引号时命令行转义在各 shell 下都不一样，从文件读最省事")
 	flag.Parse()
+
+	if *toolArgsFile != "" {
+		b, readErr := os.ReadFile(*toolArgsFile)
+		if readErr != nil {
+			log.Fatalf("[mock] 读取 -toolArgsFile 失败: %v", readErr)
+		}
+		*toolArgs = strings.TrimSpace(string(b))
+	}
 
 	switch mode(*m) {
 	case modeOK, mode500, modeSlow, modeFlaky:
@@ -584,6 +595,7 @@ func main() {
 		cachedRatio: *cachedRatio,
 		replyRunes:  *replyRunes,
 		toolCall:    *toolCall,
+		toolArgs:    *toolArgs,
 		started:     time.Now(),
 	}
 
