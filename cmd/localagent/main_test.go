@@ -147,7 +147,23 @@ func TestApplicationOutcomesAreResultsNotFailures(t *testing.T) {
 		},
 		{
 			name: "绝对路径",
-			call: func() (string, error) { return a.readFile(`{"path":"C:\\Windows\\win.ini"}`) },
+			// 必须用**平台无关**的绝对路径来构造这一条。
+			//
+			// 原来这里硬编码 `C:\Windows\win.ini`，而且**没有 runtime.GOOS 保护**
+			//（上面 TestResolveRejectsOutside 那一组有）。在 Linux 上反斜杠不是
+			// 路径分隔符，`filepath.IsAbs("C:\\Windows\\win.ini")` 返回 false，
+			// 于是它被当成**相对路径**拼进工作区 —— 越界校验自然通过，
+			// 最后报的是"文件不存在"而不是"工作区越界"，断言就挂了。
+			//
+			// 这正是"本地 Windows 全绿、CI 在 ubuntu 全红"的原因：
+			// 测试用例本身带了平台假设，而 CI 恰好不是那个平台。
+			//
+			// 用工作区外的真实绝对路径：ToSlash 之后两个平台都是绝对路径，
+			// 而且不含反斜杠，直接塞进 JSON 也不用转义。
+			call: func() (string, error) {
+				p := filepath.ToSlash(filepath.Join(outside, "x"))
+				return a.readFile(`{"path":"` + p + `"}`)
+			},
 			want: "工作区",
 		},
 		{

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"deeptalk/internal/infra/config"
+	"deeptalk/internal/infra/resilience"
 
 	"github.com/sony/gobreaker/v2"
 )
@@ -50,7 +51,17 @@ func (b *Breaker) breakerFor(model string) *gobreaker.CircuitBreaker[any] {
 		ReadyToTrip: func(c gobreaker.Counts) bool {
 			return int(c.ConsecutiveFailures) >= failureThreshold
 		},
-		IsSuccessful: func(err error) bool { return err == nil },
+
+		// 判定口径与 resilience 那套熔断器**共用同一个函数**。
+		//
+		// 这里原来是各写各的，于是漏掉了"调用方主动取消不算失败"：
+		// 用户点「停止生成」或关页面 → ctx 取消 → context.Canceled 被算成
+		// 下游失败 → **5 个用户退页面就能把模型熔断掉**，
+		// 而下游其实完全健康，接下来 10 秒所有请求被零延迟拒绝。
+		//
+		// 共用之后这类漂移不会再发生 —— 两处反直觉边界（取消要豁免、
+		// 超时不能豁免）的说明都在 resilience.IsDownstreamSuccess 里。
+		IsSuccessful: resilience.IsDownstreamSuccess,
 		OnStateChange: func(name string, _, to gobreaker.State) {
 			setBreakerState(name, stateName(to))
 		},

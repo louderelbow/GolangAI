@@ -6,7 +6,6 @@
 package resilience
 
 import (
-	"context"
 	"deeptalk/internal/infra/config"
 	"deeptalk/internal/infra/metrics"
 	"errors"
@@ -85,18 +84,10 @@ func (r *registry) breaker(name string) *gobreaker.CircuitBreaker[any] {
 			return false
 		},
 
-		IsSuccessful: func(err error) bool {
-			// 只有"调用方主动取消"才算非失败（用户关页面不该把下游判死）。
-			//
-			// 注意这里**不能**把 context.DeadlineExceeded 也算成功：
-			// 下游超时（连接超时 / 读超时 / 我们自己的 WithTimeout）恰恰是最常见的故障形态，
-			// 而 go-redis 之类的客户端在连接超时后返回的错误正好满足
-			// errors.Is(err, context.DeadlineExceeded)。一旦算成功，
-			// count 里的 ConsecutiveFailures 永远是 0，熔断器**永远不会跳闸**，
-			// 每个请求都要把完整的超时时间等一遍。
-			// （这个坑是压测时发现的：Redis 不可达时 p50 一直卡在 2 秒，熔断器却始终 closed。）
-			return err == nil || errors.Is(err, context.Canceled)
-		},
+		// 判定口径与 inference 那套准入熔断器**共用同一个函数**：
+		// 两处反直觉边界（取消要豁免、超时不能豁免）的完整说明在
+		// IsDownstreamSuccess 里，避免这里再抄一份、然后两边慢慢写歪。
+		IsSuccessful: IsDownstreamSuccess,
 
 		OnStateChange: func(name string, from, to gobreaker.State) {
 			log.Printf("[breaker] %s: %s -> %s", name, from, to)
