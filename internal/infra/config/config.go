@@ -156,6 +156,33 @@ type LLMConfig struct {
 	FallbackModels []string `toml:"fallbackModels"`
 }
 
+// RagRewriteConfig 指代消解（Query Rewrite）配置（[ragRewrite] 段）。
+//
+// 意图层能识别"含指代词、依赖上下文"，但检索仍拿原句去查——
+// 用户问"那它呢"，等于用"那它呢"做向量检索。这一段负责把指代替换成实体。
+type RagRewriteConfig struct {
+	// Enabled 用指针区分"没配置"（默认开启）与"显式关闭"（便于 A/B 对照）
+	Enabled   *bool `toml:"enabled"`
+	TimeoutMs int   `toml:"timeoutMs"` // 改写超时（默认 800ms），超时即回退原句
+}
+
+func (c RagRewriteConfig) withDefaults() RagRewriteConfig {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if c.TimeoutMs <= 0 {
+		c.TimeoutMs = 800
+	}
+	return c
+}
+
+// IsEnabled 是否开启指代消解。
+func (c RagRewriteConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+// GetRagRewrite 返回补全默认值后的指代消解配置。
+func (c *Config) GetRagRewrite() RagRewriteConfig { return c.RagRewriteConfig.withDefaults() }
+
 // InferencePoolConfig 单个模型的推理池配置
 type InferencePoolConfig struct {
 	MaxConcurrent int `toml:"maxConcurrent"` // 同时进行的请求数上限，超出排队
@@ -261,6 +288,7 @@ type Config struct {
 	AgentConfig      `toml:"agent"`
 	LLMConfig        `toml:"llm"`
 	InferenceConfig  `toml:"inference"`
+	RagRewriteConfig `toml:"ragRewrite"`
 }
 
 // TolerantFloat 兼容 TOML 里把浮点字段写成整数的写法。

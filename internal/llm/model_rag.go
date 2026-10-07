@@ -11,6 +11,7 @@ import (
 	"deeptalk/internal/decision"
 	"deeptalk/internal/inference"
 	"deeptalk/internal/infra/config"
+	"deeptalk/internal/infra/metrics"
 	"deeptalk/internal/rag"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -22,7 +23,8 @@ import (
 type AliRAGModel struct {
 	llm      model.ToolCallingChatModel
 	name     string
-	username string // 用于获取用户的文档
+	username string        // 用于获取用户的文档
+	rewriter *rag.Rewriter // 指代消解；nil 表示关闭
 }
 
 func NewAliRAGModel(ctx context.Context, username string) (*AliRAGModel, error) {
@@ -51,11 +53,36 @@ func NewAliRAGModel(ctx context.Context, username string) (*AliRAGModel, error) 
 	// 推理调度必须覆盖**所有**模型路径：只包 Agent 的话，
 	// 走 RAG/DeepSeek 的请求会完全绕过并发上限与排队。
 	var scheduled model.ToolCallingChatModel = inference.Shared().Wrap(modelName, llm)
-	return &AliRAGModel{
+
+	m := &AliRAGModel{
 		llm:      scheduled,
 		name:     modelName,
 		username: username,
-	}, nil
+	}
+	// 指代消解：意图层能识别"含指代词"，但检索仍用原句——
+	// 这一段负责把指代替换成实体，否则"那它呢"几乎检索不到东西。
+	if conf.GetRagRewrite().IsEnabled() {
+		m.rewriter = rag.NewRewriter(scheduled)
+	}
+	return m, nil
+}
+
+// rewriteQuery 按触发条件决定是否做指代消解。
+//
+// 触发条件见 rag.ShouldRewrite：命中指代词，或问题过短且存在历史。
+// 未触发/失败/超时都返回原句，调用方拿到的 Result.Query 永远可用。
+func (o *AliRAGModel) rewriteQuery(ctx context.Context, query string, messages []*schema.Message) rag.RewriteResult {
+	skipped := rag.RewriteResult{Query: query, Reason: rag.RewriteSkipped}
+	if o.rewriter == nil {
+		return skipped
+	}
+	// len(messages)>1 说明除当前提问外还有历史
+	ok, reason := rag.ShouldRewrite(query, len(messages)-1)
+	if !ok {
+		return skipped
+	}
+	log.Printf("[RAG] rewrite triggered (%s)", reason)
+	return o.rewriter.Rewrite(ctx, query, messages)
 }
 
 func (o *AliRAGModel) GenerateResponse(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
@@ -100,13 +127,23 @@ func (o *AliRAGModel) GenerateResponse(ctx context.Context, messages []*schema.M
 		return o.llm.Generate(ctx, messages)
 	}
 
-	keywords := o.extractKeywords(ctx, query)
-	if len(keywords) > 0 {
-		log.Printf("[RAG] extracted keywords: %v", keywords)
-		query = query + " " + strings.Join(keywords, " ")
+	// 指代消解：只改检索语句，不改用户原话——提示词里仍然展示原问题，
+	// 这样模型看到的还是"那它呢"，但检索已经拿具体实体去查了。
+	rewrite := o.rewriteQuery(ctx, query, messages)
+	metrics.CountRagRewrite(rewrite.Reason)
+	searchQuery := query
+	if rewrite.Rewritten {
+		log.Printf("[RAG] rewrite %q -> %q", query, rewrite.Query)
+		searchQuery = rewrite.Query
 	}
 
-	docs, err := ragQuery.RetrieveDocuments(ctx, query)
+	keywords := o.extractKeywords(ctx, searchQuery)
+	if len(keywords) > 0 {
+		log.Printf("[RAG] extracted keywords: %v", keywords)
+		searchQuery = searchQuery + " " + strings.Join(keywords, " ")
+	}
+
+	docs, err := ragQuery.RetrieveDocuments(ctx, searchQuery)
 	if err != nil {
 		log.Printf("Failed to retrieve documents: %v", err)
 		return o.llm.Generate(ctx, messages)
@@ -164,13 +201,22 @@ func (o *AliRAGModel) StreamResponse(ctx context.Context, messages []*schema.Mes
 		return o.streamWithoutRAG(ctx, messages, cb)
 	}
 
-	keywords := o.extractKeywords(ctx, query)
-	if len(keywords) > 0 {
-		log.Printf("[RAG-Stream] extracted keywords: %v", keywords)
-		query = query + " " + strings.Join(keywords, " ")
+	// 指代消解：只改检索语句，原问题照旧进提示词
+	rewrite := o.rewriteQuery(ctx, query, messages)
+	metrics.CountRagRewrite(rewrite.Reason)
+	searchQuery := query
+	if rewrite.Rewritten {
+		log.Printf("[RAG-Stream] rewrite %q -> %q", query, rewrite.Query)
+		searchQuery = rewrite.Query
 	}
 
-	docs, err := ragQuery.RetrieveDocuments(ctx, query)
+	keywords := o.extractKeywords(ctx, searchQuery)
+	if len(keywords) > 0 {
+		log.Printf("[RAG-Stream] extracted keywords: %v", keywords)
+		searchQuery = searchQuery + " " + strings.Join(keywords, " ")
+	}
+
+	docs, err := ragQuery.RetrieveDocuments(ctx, searchQuery)
 	if err != nil {
 		log.Printf("Failed to retrieve documents: %v", err)
 		return o.streamWithoutRAG(ctx, messages, cb)

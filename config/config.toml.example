@@ -178,3 +178,10 @@ weight = 10
 failureThreshold = 5
 openDurationMs = 10000
 halfOpenProbes = 3
+# ============ RAG 指代消解（Query Rewrite）============
+# 意图层能识别"含指代词、依赖上下文"，但检索仍拿原句去查——
+# 用户问"那它呢"，等于用"那它呢"做向量检索，召回接近随机。
+# 这一段在检索前把指代替换成上文里的实体。
+[ragRewrite]
+enabled = true
+timeoutMs = 800              # 超时即回退原句：改写是锦上添花，不能拖慢主链路

@@ -73,6 +73,21 @@ var chatWords = []string{
 // pronounWords 指代词：出现说明依赖上下文，绝不能判成"闲聊"
 var pronounWords = []string{"它", "这个", "那个", "上面", "刚才", "前面", "这条", "该条", "上述"}
 
+// HasPronoun 返回文本里命中的指代词。
+//
+// 导出它是为了让 Query Rewrite 复用同一份词表：
+// 意图层只负责"识别出依赖上下文"，消解是检索层的事。
+// 两处各维护一份词表的话，"识别到指代但没消解"这个断层迟早会再出现。
+func HasPronoun(text string) (string, bool) {
+	lower := strings.ToLower(text)
+	for _, p := range pronounWords {
+		if strings.Contains(lower, p) {
+			return p, true
+		}
+	}
+	return "", false
+}
+
 // identityWords 指向"助手自身身份"的元问题（应跳过文档检索，直接对话回答）
 var identityWords = []string{
 	"你是谁", "你是什么", "你叫什么", "你是ai", "你是机器人", "你是助手", "你是模型",

@@ -1,0 +1,151 @@
+[mainConfig]
+appName = "DeepTalk"
+host = "0.0.0.0"
+port = 9090
+
+[emailConfig]
+authcode = "utachyuuqnoycjda"
+email = "3251983485@qq.com"
+
+[redisConfig]
+host = "172.24.38.102"
+port = 6379
+password = ""
+db = 0
+
+[mysqlConfig]
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = "050922"
+databaseName = "deeptalk"
+charset =  "utf8mb4"
+
+[jwtConfig]
+ expire_duration= 8760
+ issuer= "immortal"
+ subject= "DeepTalk"
+ key= "GolangAIwpl"
+
+ [rabbitmqConfig]
+  host= "127.0.0.1"
+  port= 5672
+  username= "root"
+  password= "123456"
+  vhost= "/"
+
+ [ragModelConfig]
+  embeddingModel= "text-embedding-v4"
+  chatModelName="qwen-turbo"
+  docDir = "./docs"
+  baseUrl="http://127.0.0.1:8099/v1"
+  dimension=1024
+  apiKey="stress-dummy-key"
+  maxContextTokens=4000
+  maxDistance=0.7
+  fallbackTopN=3
+
+
+[aiPricing]
+defaultPromptPrice = 2.0
+defaultCompletionPrice = 8.0
+dailyTokenQuota = 0
+
+[aiPricing.promptPrice]
+deepseek-chat = 2.0
+qwen-turbo = 0.3
+
+[aiPricing.completionPrice]
+deepseek-chat = 8.0
+qwen-turbo = 0.6
+
+# 稳定的系统提示：放在消息最前面，有利于命中上游 prompt 前缀缓存
+[aiPrompt]
+systemPrompt = "你是 DeepTalk 的智能助手。回答简洁、准确、有依据；不确定时明确说明，不要编造。"
+
+# 语义缓存：相似问题直接返回缓存答案（只对会话首轮提问生效）
+[semanticCache]
+enabled = true
+threshold = 0.92
+maxEntries = 500
+ttlSeconds = 3600
+
+# MCP 工具注册表：maxStep 必须写在 [[mcpConfig.servers]] 之前
+[mcpConfig]
+maxStep = 5
+
+[[mcpConfig.servers]]
+name = "weather"
+url = "http://localhost:8081/mcp"
+allowedTools = ["get_weather"]
+
+[[mcpConfig.servers]]
+name = "tavily"
+command = "npx.cmd"
+args = ["-y", "tavily-mcp@latest"]
+env = ["TAVILY_API_KEY=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"]
+allowedTools = ["tavily_search"]
+
+# ============ 熔断器（sony/gobreaker）============
+[resilience]
+disabled = false
+failureThreshold = 5           # 连续失败 5 次跳闸
+failureRatio = 0.6             # 或失败率 60%（需 minRequests 以上样本）
+minRequests = 10
+timeoutSeconds = 30            # open 持续 30 秒后进入 half-open 试探
+maxRequestsHalfOpen = 3        # half-open 允许的试探请求数
+intervalSeconds = 60           # 关闭态计数窗口滚动周期
+
+# ============ 意图识别（分层：规则层 + LLM 兜底）============
+[intentConfig]
+llmFallback = true
+cacheTTLSeconds = 600          # 同一问题在此时间内只判一次
+maxCacheEntries = 1000
+
+# ============ Agent 可靠性 ============
+
+[agent]
+maxSteps = 8                 # 单轮最大推理步数
+maxTokens = 20000            # 单轮累计 token 上限
+maxWallClockSeconds = 120    # 单轮墙钟上限（秒）
+toolTimeoutSeconds = 15      # 单次工具调用超时（秒）
+modelTimeoutSeconds = 60     # 单次模型调用超时（秒）
+toolMaxAttempts = 2          # 幂等工具最大尝试次数（含首次）
+
+# ============ 模型兜底链 ============
+[llm]
+fallbackModels = ["qwen-turbo"]
+# ============ 推理请求调度 ============
+# 把"每个请求直接调用模型"改成"先排队、再按槽位分发"：
+# 上游并发可控；过载时快速失败，而不是所有请求一起超时。
+[inference]
+enabled = true
+queueTimeoutMs = 3000        # 排队超过此时长直接拒绝
+maxQueueDepth = 50           # 压测用：压低上限便于观察 queue_full
+
+# 每个模型一个池子；未在这里列出的模型走默认值（并发 10）
+[inference.pools.qwen-turbo]
+maxConcurrent = 5
+weight = 10
+
+[inference.pools.deepseek-chat]
+maxConcurrent = 5
+weight = 10
+
+# 准入熔断：连续失败 N 次后在**入队之前**快速拒绝。
+# 与 [resilience] 的模型熔断分工不同：那个按失败率保护"调用"，
+# 这个按连续失败数避免把已知故障模型的队列排满。
+[inference.breaker]
+failureThreshold = 5
+openDurationMs = 10000
+halfOpenProbes = 3
+
+# ============ 压测专用：关闭限流 ============
+# 本次压测的目标是推理调度（排队/并发/熔断），
+# 限流会把请求挡在模型之前，让调度器根本没机会工作。
+[rateLimit]
+enabled = false
+# ============ RAG 指代消解 ============
+[ragRewrite]
+enabled = true
+timeoutMs = 800

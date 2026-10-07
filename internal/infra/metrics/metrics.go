@@ -211,7 +211,16 @@ const (
 	MetricAgentToolRetry      = "deeptalk_agent_tool_retry_total"      // 工具重试，labels: tool, result=success|fail
 	MetricAgentDegraded       = "deeptalk_agent_degraded_total"        // 降级，labels: level=retry|fallback_model|plain_chat|error
 	MetricAgentTimeout        = "deeptalk_agent_timeout_total"         // 超时，labels: kind=tool|model|turn
+
+	// RAG 指代消解（PHASE-4）
+	MetricRagRewrite = "deeptalk_rag_rewrite_total" // labels: result=rewritten|skipped|fallback_*
 )
+
+// CountRagRewrite 记录一次指代消解的结果。
+// result 取 rewritten / skipped / fallback_empty / fallback_error / fallback_timeout。
+func CountRagRewrite(result string) {
+	Count(MetricRagRewrite, Labels{"result": result}, 1)
+}
 
 // ======================== Agent 可靠性便捷计数 ========================
 //
@@ -331,6 +340,7 @@ func RegisterHelp() {
 	Describe(MetricAgentToolRetry, "Agent 工具重试次数与结果")
 	Describe(MetricAgentDegraded, "Agent 降级次数（重试/备用模型/纯对话/错误）")
 	Describe(MetricAgentTimeout, "Agent 超时次数（工具/模型/整轮）")
+	Describe(MetricRagRewrite, "RAG 指代消解结果（改写/跳过/各降级原因）")
 
 	// 预置 0 值序列
 	SetGauge(MetricActiveSession, nil, 0)
@@ -345,6 +355,9 @@ func RegisterHelp() {
 	}
 	for _, kind := range []string{"tool", "model", "turn"} {
 		Count(MetricAgentTimeout, Labels{"kind": kind}, 0)
+	}
+	for _, result := range []string{"rewritten", "skipped", "fallback_empty", "fallback_error", "fallback_timeout"} {
+		Count(MetricRagRewrite, Labels{"result": result}, 0)
 	}
 	// 直方图也要预置分桶，否则无流量时看不到 _bucket/_sum/_count
 	EnsureHistogram(MetricAIDuration, Labels{"model": "", "source": "none"})
